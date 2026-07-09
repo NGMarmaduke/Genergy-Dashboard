@@ -2,6 +2,23 @@
 
 All notable changes to the Genergy Dashboard are documented here.
 
+## [2.23.1] - 2026-07-09
+
+Follow-up release with an optional battery-stack dashboard layout, battery detail-panel improvements, EV-card polish, and a round of fixes on top of `2.23.0`.
+
+### Added
+- **Show Battery Stack on Dashboard** (Settings → Display) — Optional toggle that adds the battery pack stack as a third column beside the energy-flow Sankey on wide screens (≥ 1500 px), aligned with the chart and responsive/mobile-first (it stacks below on smaller screens). Off by default; when off the battery stack stays in the battery detail modal. Layout uses only standard grid media queries, verified in Chromium and WebKit/Safari with no horizontal overflow.
+- **Battery pack detail entity overrides** — Optional per-pack **Voltage / Current / Power / SoH / Temperature** entity fields (Settings → Entities → 🔋 Battery System, up to 8 packs) for BMS whose sensor names don't follow the auto-detected pattern. Auto-detection stays the default; overrides only apply when set.
+
+### Fixed
+- **Sankey node labels over-extending** — Node bars are now sized to the actual connecting-flow throughput, so a label's colored panel ends exactly where its flows end instead of hanging below them.
+- **Battery pack detail rows showing "—"** — The per-pack detail entity derivation now validates candidate names against entities that actually exist, so BMS that keep a `_view_` segment on their sibling sensors (e.g. Gobel) resolve voltage / current / SoH / power / temperature / cell data correctly.
+- **"Number of EV Chargers" reverting to 1** — The selector's change handler was bound in the wrong settings tab and never fired; the setting now persists.
+
+### Changed
+- **EV charger cards are now conditional** — The EV Chargers panel only renders a card for a charger that has entities configured, and hides it when the charger is disconnected/unavailable — no more "Not configured" placeholder cards.
+- **Battery card compact (mobile) layout** — The Inverter / Batt pills are now tap-to-expand for per-pack detail, matching the wide layout.
+
 ## [2.23.0] - 2026-07-08
 
 Stable release finalizing the interactive dashboard line (`2.23.0-pre.1`), with new EV, Sankey, event-card, and Energy Manager features plus a round of community-reported fixes.

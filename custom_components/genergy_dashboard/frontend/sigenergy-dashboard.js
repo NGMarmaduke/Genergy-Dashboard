@@ -246,6 +246,7 @@ const DEFAULT_CONFIG = {
     sankey_color_theme: 'modern',
     modal_animation: 'scale',
     default_forecast_view: 'combined',
+    show_battery_stack: false,
   },
 };
 
@@ -2912,6 +2913,18 @@ class SigenergySettingsCard extends HTMLElement {
         ${this._entityRow('Battery Voltage', 'battery_voltage', e)}
         ${this._entityRow('Battery Current', 'battery_current', e)}
         ${Array.from({length: Math.min(cfg.features?.battery_packs || 2, 8)}, (_, i) => this._entityRow('Pack ' + (i+1) + ' SoC', 'battery_pack' + (i+1) + '_soc', e)).join('\n        ')}
+        <div style="font-size:10px;color:#666;margin:8px 0 4px;padding:6px 8px;background:rgba(255,165,0,0.07);border-radius:6px;border-left:2px solid rgba(255,165,0,0.4);">🛠️ <b>Detail entity overrides</b> are optional — the pack detail rows (voltage, current, power, SoH, temperature) are <b>auto-detected</b> from the Pack SoC entity. Only fill these in if your BMS names those sensors differently and a row shows “—”.</div>
+        ${Array.from({length: Math.min(cfg.features?.battery_packs || 2, 8)}, (_, i) => `
+        <details style="margin:2px 0 4px;">
+          <summary style="cursor:pointer;font-size:11px;color:#8892a4;padding:4px 2px;list-style:none;">⚙️ Pack ${i+1} detail entity overrides (optional)</summary>
+          <div style="padding-left:8px;border-left:2px solid rgba(0,212,184,0.2);margin:2px 0 6px;">
+            ${this._entityRow('Pack ' + (i+1) + ' Voltage', 'battery_pack' + (i+1) + '_voltage', e)}
+            ${this._entityRow('Pack ' + (i+1) + ' Current', 'battery_pack' + (i+1) + '_current', e)}
+            ${this._entityRow('Pack ' + (i+1) + ' Power', 'battery_pack' + (i+1) + '_power', e)}
+            ${this._entityRow('Pack ' + (i+1) + ' SoH', 'battery_pack' + (i+1) + '_soh', e)}
+            ${this._entityRow('Pack ' + (i+1) + ' Temperature', 'battery_pack' + (i+1) + '_temp', e)}
+          </div>
+        </details>`).join('\n        ')}
       </div>
     `;
 
@@ -4248,23 +4261,6 @@ class SigenergySettingsCard extends HTMLElement {
       });
     }
 
-    // Number of EV chargers selector handler
-    const numEvChargersSelect = el.querySelector('.num-ev-chargers-select');
-    if (numEvChargersSelect) {
-      numEvChargersSelect.addEventListener('change', () => {
-        const cfg2 = this._storeGet();
-        cfg2.features.num_ev_chargers = parseInt(numEvChargersSelect.value) || 1;
-        this._storeSave(cfg2);
-        // Rebuild the dashboard so the EV Chargers panel appears/disappears,
-        // then re-render settings so the EV 2 config section shows/hides.
-        if (this._hass) {
-          this._buildDashboard().then(() => this._render()).catch(() => this._render());
-        } else {
-          this._render();
-        }
-      });
-    }
-
     // Bind entity input changes — update state badge inline, no full re-render
     el.querySelectorAll('.row-input').forEach(input => {
       input.addEventListener('change', () => {
@@ -5077,6 +5073,20 @@ class SigenergySettingsCard extends HTMLElement {
         const cfg2 = this._storeGet();
         const threshold = parseFloat(evAutoThresholdInput.value);
         cfg2.features.ev_vehicle_power_threshold = Number.isFinite(threshold) && threshold >= 0 ? threshold : 100;
+        this._storeSave(cfg2);
+        if (this._hass) await this._buildDashboard();
+        this._render();
+      });
+    }
+
+    // Number of EV chargers selector (this select lives in the Features tab, so
+    // its handler must be bound here in _renderFeatures — not in _renderEntities,
+    // where the element doesn't exist and the listener would never attach).
+    const numEvChargersSelect = el.querySelector('.num-ev-chargers-select');
+    if (numEvChargersSelect) {
+      numEvChargersSelect.addEventListener('change', async () => {
+        const cfg2 = this._storeGet();
+        cfg2.features.num_ev_chargers = parseInt(numEvChargersSelect.value) || 1;
         this._storeSave(cfg2);
         if (this._hass) await this._buildDashboard();
         this._render();
@@ -6855,8 +6865,10 @@ return forecast.map(function(d) {
       // EV Chargers panel — one stat card per configured EV (Power · SoC · Range · State).
       // Shown when a 2nd AC charger is enabled (features.num_ev_chargers >= 2). EV 1 also
       // keeps its garage node on the house card; this panel surfaces precise per-EV stats
-      // and is the only place EV 2 is shown. Cards render even with blank entities so the
-      // user can see the feature is active and knows to configure it on the Entities tab.
+      // and is the only place EV 2 is shown. A card is only rendered for an EV that has at
+      // least one entity CONFIGURED (no "Not configured" placeholders), and each card is
+      // dynamically hidden (HA visibility conditions) when its charger is DISCONNECTED /
+      // unavailable, so an absent/idle EV doesn't occupy the panel.
       if ((f.num_ev_chargers || 1) >= 2) {
         const _evColorTpl = (powerId) => powerId
           ? "{% set u = (state_attr('" + powerId + "','unit_of_measurement') or 'W') | string %}" +
@@ -6870,27 +6882,39 @@ return forecast.map(function(d) {
           if (d.soc) parts.push("{{ states('" + d.soc + "') | round(0) }}%");
           if (d.range) parts.push("{{ states('" + d.range + "') | round(0) }} {{ state_attr('" + d.range + "','unit_of_measurement') or 'km' }}");
           if (d.state) parts.push("{{ states('" + d.state + "') }}");
-          return parts.length ? parts.join('  ·  ') : 'Not configured — set entities on the Entities tab';
+          return parts.join('  ·  ');
         };
         const _evDefs = [
           { power: e.ev_charger_power, state: e.ev_charger_state, soc: e.ev_soc, range: e.ev_range, label: (cfg.display?.ev_charger_label || 'EV 1') },
           { power: e.ev2_charger_power, state: e.ev2_charger_state, soc: e.ev2_soc, range: e.ev2_range, label: (cfg.display?.ev2_charger_label || 'EV 2') },
         ];
-        const _evCards = _evDefs.map(d => {
-          const card = {
-            type: 'custom:mushroom-template-card',
-            primary: d.label,
-            secondary: _evSecondaryTpl(d),
-            icon: 'mdi:ev-station',
-            icon_color: _evColorTpl(d.power),
-            tap_action: { action: 'more-info' },
-            card_mod: { style: _cardStyle },
-          };
-          const anchor = d.power || d.soc || d.state || d.range;
-          if (anchor) card.entity = anchor;
-          return card;
-        });
-        houseStack.push({ type: 'horizontal-stack', cards: _evCards });
+        // States that mean "no vehicle / not plugged in / entity dead" — the card hides
+        // for these. Kept conservative (does NOT include idle/standby) so a plugged-in
+        // EV that isn't actively charging still shows.
+        const _evOffStates = ['unavailable', 'unknown', 'disconnected', 'not_connected', 'not connected', 'no_vehicle', 'no vehicle', 'unplugged', 'off', 'none', ''];
+        const _evCards = _evDefs
+          .map(d => ({ d, anchor: d.power || d.soc || d.state || d.range }))
+          .filter(x => x.anchor)   // configured EVs only
+          .map(({ d, anchor }) => {
+            const card = {
+              type: 'custom:mushroom-template-card',
+              primary: d.label,
+              secondary: _evSecondaryTpl(d),
+              icon: 'mdi:ev-station',
+              icon_color: _evColorTpl(d.power),
+              tap_action: { action: 'more-info' },
+              entity: anchor,
+              card_mod: { style: _cardStyle },
+            };
+            // "connected" gate: prefer the charger state entity; else fall back to the
+            // anchor simply being available. HA removes a card from the stack when its
+            // visibility conditions fail (2024.1+); older HA ignores the key (card shows).
+            card.visibility = d.state
+              ? [{ condition: 'state', entity: d.state, state_not: _evOffStates }]
+              : [{ condition: 'state', entity: anchor, state_not: ['unavailable', 'unknown'] }];
+            return card;
+          });
+        if (_evCards.length) houseStack.push({ type: 'horizontal-stack', cards: _evCards });
       }
 
       // Build Forecast Modal — compact trigger bar that opens fullscreen overlay on tap
@@ -7181,6 +7205,25 @@ return forecast.map(function(d) {
 
       newCards.push({ type: 'vertical-stack', cards: [sankeyHeader, sankeyChart, sankeyInfoPanel], view_layout: { 'grid-column': '2' } });
 
+      // Optional battery-stack column (Settings → Display toggle). Pushed as a DIRECT
+      // #root child (3rd card) — NOT a nested grid — so it inherits the same responsive
+      // constraints as house/sankey (min-width:0 + overflow:hidden) and never overflows
+      // on mobile/Safari. Column placement (3-across ≥1500px, stacked below) is driven
+      // by the config-aware injected RESPONSIVE_CSS (battery variant). A transparent
+      // spacer aligns its top with the sankey chart on desktop and collapses <1500px.
+      if (cfg.display && cfg.display.show_battery_stack) {
+        const _batterySpacer = {
+          type: 'markdown',
+          content: '&nbsp;',
+          card_mod: { style: 'ha-card { background: transparent !important; border: none !important; box-shadow: none !important; height: 92px !important; min-height: 92px !important; margin: 0 !important; padding: 0 !important; } ha-markdown { padding: 0 !important; } @media (max-width: 1499px) { ha-card { display: none !important; height: 0 !important; min-height: 0 !important; } }' }
+        };
+        newCards.push({
+          type: 'vertical-stack',
+          cards: [ _batterySpacer, { type: 'custom:sigenergy-device-card', battery_packs: (f.battery_packs || 2) } ],
+          view_layout: { 'grid-column': '3' }
+        });
+      }
+
       // Section divider helper — creates a styled label between major card groups
       const _sectionDivider = (label, icon) => ({
         type: 'markdown',
@@ -7286,6 +7329,15 @@ return forecast.map(function(d) {
           <div class="switch ${d.kiosk_mode ? 'on' : 'off'}" data-key="kiosk_mode_toggle" style="flex-shrink:0;margin-left:12px;"></div>
         </div>
         <div style="margin-top:8px;padding:8px 10px;background:rgba(255,165,0,0.1);border:1px solid rgba(255,165,0,0.25);border-radius:6px;font-size:10px;color:#ffa726;line-height:1.5;">⚠️ Enabling kiosk mode will redirect you to the overview (main) dashboard page. To exit kiosk mode, click the <b>✕</b> button in the top-right corner.</div>
+      </div>
+      <div class="section" style="border:1px solid ${d.show_battery_stack ? '#00d4b8' : '#2d3451'};border-radius:12px;padding:12px;transition:all 0.3s;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:${d.show_battery_stack ? '#00d4b8' : '#8892a4'};">🔋 Show Battery Stack on Dashboard</div>
+            <div style="font-size:10px;color:#666;margin-top:2px;">Adds the battery pack stack as a third column beside the energy flow (on wide screens ≥1500px; it stacks below on smaller screens). When off, it stays in the battery detail modal only.</div>
+          </div>
+          <div class="switch ${d.show_battery_stack ? 'on' : 'off'}" data-key="show_battery_stack_toggle" style="flex-shrink:0;margin-left:12px;"></div>
+        </div>
       </div>
       <div class="section">
         <div class="section-title">Formatting</div>
@@ -7477,6 +7529,22 @@ return forecast.map(function(d) {
           window.location.href = '/dashboard-sigenergy/0';
           return;
         }
+        this._render();
+      });
+    }
+
+    // Show-battery-stack toggle — rebuilds the overview (adds/removes the battery
+    // column) and re-fires the responsive-grid injector so the outer #root switches
+    // between the default and battery-stack CSS variants (both plain injected @media,
+    // WebKit-safe).
+    const batStackToggle = el.querySelector('[data-key="show_battery_stack_toggle"]');
+    if (batStackToggle) {
+      batStackToggle.addEventListener('click', async () => {
+        const cfg2 = this._storeGet();
+        cfg2.display.show_battery_stack = !cfg2.display.show_battery_stack;
+        this._storeSave(cfg2);
+        if (this._hass) await this._buildDashboard();
+        if (window._sigenergyReinjectResponsive) window._sigenergyReinjectResponsive();
         this._render();
       });
     }
@@ -7820,6 +7888,38 @@ class SigenergyEnergyFlowCard extends HTMLElement {
     let _dstY2 = 0;
     dstBoxes.forEach(d => { d.y = _dstY2; _dstY2 += d.h + gap; });
 
+    // ── Resize node bars to their actual connecting-flow throughput ────────────
+    // A node's bar was sized to its entity value (node.kwh), but the ribbons only
+    // carry the greedy-allocated energy, which sums to <100% when the sensor
+    // totals don't conserve (issue #36). That unfilled remainder is exactly the
+    // label over-extending past the flows. A correct Sankey sizes each node by
+    // the sum of its connecting link widths — so re-size every bar to its flow
+    // total and remember that total as b.flowTotal for the ribbon math below.
+    // Result: sum(ribbons) === b.h, so the bar bottom lands on the last flow.
+    const _resizeByFlow = (boxes, flowTotalMap, avail) => {
+      if (boxes.length === 0) return;
+      let totalFlow = 0;
+      boxes.forEach(b => { b.flowTotal = flowTotalMap[b.entity_id] || 0; totalFlow += b.flowTotal; });
+      boxes.forEach(b => { b.h = totalFlow > 0 ? (b.flowTotal / totalFlow) * avail : avail / boxes.length; });
+      // Same minBarH bump + proportional shrink as _allocateBoxes, so tiny nodes
+      // stay readable (minBarH=20) and the column still fills the full height.
+      let deficit = 0, flexTotal = 0;
+      boxes.forEach(b => { if (b.h < minBarH) { deficit += minBarH - b.h; b.h = minBarH; } else { flexTotal += b.h; } });
+      if (deficit > 0 && flexTotal > deficit) {
+        const shrink = (flexTotal - deficit) / flexTotal;
+        boxes.forEach(b => { if (b.h > minBarH) b.h *= shrink; });
+      }
+      let y = 0;
+      boxes.forEach(b => { b.y = y; y += b.h + gap; });
+    };
+    const _srcFlowTotal = {}, _dstFlowTotal = {};
+    flows.forEach(f => {
+      _srcFlowTotal[f.src.entity_id] = (_srcFlowTotal[f.src.entity_id] || 0) + f.kwh;
+      _dstFlowTotal[f.dst.entity_id] = (_dstFlowTotal[f.dst.entity_id] || 0) + f.kwh;
+    });
+    _resizeByFlow(srcBoxes, _srcFlowTotal, srcAvail);
+    _resizeByFlow(dstBoxes, _dstFlowTotal, dstAvail);
+
     // Pre-assign destination cursor positions: within each dest, flows from
     // upper sources get upper slots
     const flowsByDest = {};
@@ -7834,7 +7934,7 @@ class SigenergyEnergyFlowCard extends HTMLElement {
     dstBoxes.forEach(dst => {
       const dstFlows = flowsByDest[dst.entity_id] || [];
       dstFlows.forEach(f => {
-        const ribbonDst = f.dst.kwh > 0 ? (f.kwh / f.dst.kwh) * f.dst.h : 0;
+        const ribbonDst = f.dst.flowTotal > 0 ? (f.kwh / f.dst.flowTotal) * f.dst.h : 0;
         f._dstSlot = { dy1: f.dst.y + f.dst.cursor, ribbonDst };
         f.dst.cursor += ribbonDst;
       });
@@ -7860,7 +7960,7 @@ class SigenergyEnergyFlowCard extends HTMLElement {
       const gradId = `fg${idx}`;
       gradients.push({ id: gradId, c1: flow.src.color, c2: flow.dst.color });
 
-      const ribbonSrc = flow.src.kwh > 0 ? (flow.kwh / flow.src.kwh) * flow.src.h : 0;
+      const ribbonSrc = flow.src.flowTotal > 0 ? (flow.kwh / flow.src.flowTotal) * flow.src.h : 0;
       const sy1 = flow.src.y + flow.src.cursor;
       const sy2 = sy1 + ribbonSrc;
       flow.src.cursor += ribbonSrc;
@@ -10046,6 +10146,175 @@ class SigenergyDeviceCard extends HTMLElement {
     }
   }
 
+  // Derive the shared entity prefix for a pack's detail sensors (voltage / current /
+  // power / temperature / cell data) from its configured SoC entity. BMS naming
+  // differs: Gobel keeps a "_view_" segment on every sibling (`..._view_soc`,
+  // `..._view_voltage`), while Seplos/generic use `_state_of_charge` / `_soc` with
+  // bare siblings. Old code stripped the whole matched suffix and broke on Gobel
+  // (`_view_soc` → `..._` → probed `..._voltage`, which doesn't exist; the real
+  // sensor is `..._view_voltage`). Fix: try each candidate suffix least-stripped
+  // first and pick the first whose derived prefix actually has a sibling sensor in
+  // HA; only fall back to raw stripping when none validate (keeps generic BMS working).
+  _derivePackPrefix(packSocEntity) {
+    if (!packSocEntity) return '';
+    var self = this;
+    var probe = function(pfx) {
+      return !!(self._hass && (self._hass.states[pfx + 'voltage'] || self._hass.states[pfx + 'current'] || self._hass.states[pfx + 'power']));
+    };
+    var sfx = ['_view_soc', '_state_of_charge', '_battery_soc', '_battery_level', '_soc_percent', '_soc'];
+    var byLen = sfx.slice().sort(function(a, b) { return a.length - b.length; });
+    for (var i = 0; i < byLen.length; i++) {
+      if (packSocEntity.endsWith(byLen[i])) {
+        var cand = packSocEntity.slice(0, -byLen[i].length) + '_';
+        if (probe(cand)) return cand;
+      }
+    }
+    // No sibling validated — preserve original priority-order behaviour.
+    for (var j = 0; j < sfx.length; j++) {
+      if (packSocEntity.endsWith(sfx[j])) return packSocEntity.slice(0, -sfx[j].length) + '_';
+    }
+    var lu = packSocEntity.lastIndexOf('_');
+    return lu > 0 ? packSocEntity.slice(0, lu + 1) : '';
+  }
+
+  _buildDetailPanels(np, _t) {
+    var self = this;
+    var store = window.SigenergyConfig;
+    var panels = '';
+    var panelStyle = _t === 'light'
+      ? 'background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#e0e0e0);border-radius:12px;padding:12px 16px;margin:8px 4px;'
+      : 'background:var(--card-background-color,rgba(30,35,54,0.96));border:1px solid var(--divider-color,#2d3451);border-radius:12px;padding:12px 16px;margin:8px 4px;';
+    var statStyle = 'display:inline-block;text-align:center;padding:6px 10px;min-width:70px;';
+    var statVal = _t === 'light'
+      ? 'font-size:18px;font-weight:700;color:var(--primary-text-color,#1a1f2e);display:block;'
+      : 'font-size:18px;font-weight:700;color:#fff;display:block;';
+    var statLbl = _t === 'light'
+      ? 'font-size:10px;color:var(--secondary-text-color,#666);text-transform:uppercase;letter-spacing:1px;'
+      : 'font-size:10px;color:#8892a4;text-transform:uppercase;letter-spacing:1px;';
+    var headerStyle = _t === 'light'
+      ? 'font-size:14px;font-weight:700;color:var(--primary-text-color,#1a1f2e);margin-bottom:8px;letter-spacing:1px;'
+      : 'font-size:14px;font-weight:700;color:#e0e4ec;margin-bottom:8px;letter-spacing:1px;';;
+    var dps = store ? (store.getDisplay('decimal_places') ?? 1) : 1; // user-configurable decimal places
+
+    var fmtEntity = function(eid, decimals, unit) {
+      if (!self._hass || !eid) return '—';
+      var s = self._hass.states[eid];
+      if (!s || s.state === 'unavailable' || s.state === 'unknown') return '—';
+      var v = parseFloat(s.state);
+      if (isNaN(v)) return s.state;
+      // Unit-aware: if caller expects W but entity reports kW, convert
+      var entityUnit = (s.attributes.unit_of_measurement || '').toLowerCase();
+      if (unit === 'W' || unit === 'w') {
+        if (entityUnit === 'kw') { v = v * 1000; }
+        else if (entityUnit === 'mw') { v = v * 1000000; }
+      }
+      return v.toFixed(decimals !== undefined ? decimals : 1) + (unit || '');
+    };
+
+    if (this._expanded['inverter']) {
+      // FIX(bug4): Read entity IDs from config store instead of hardcoding Deye names
+      var invTemp = store ? store.getEntity('inverter_temp') : '';
+      var invIntTemp = store ? store.getEntity('inverter_internal_temp') : '';
+      var invOutput = store ? store.getEntity('inverter_output_power') : '';
+      var invRated = store ? store.getEntity('inverter_rated_power') : '';
+      var pvOne = store ? store.getEntity('pv1_power') : '';
+      var pvTwo = store ? store.getEntity('pv2_power') : '';
+      var pvStrings = store ? (store.getFeature && store.getFeature('pv_strings')) || 2 : 2;
+      var gridV = store ? store.getEntity('grid_voltage') : '';
+      var gridHz = store ? store.getEntity('grid_frequency') : '';
+      var gridVL2 = store ? store.getEntity('grid_voltage_l2') : '';
+      var gridVL3 = store ? store.getEntity('grid_voltage_l3') : '';
+      var threePhase = store ? (store.getFeature && store.getFeature('three_phase')) : false;
+      panels += '<div style="' + panelStyle + '">';
+      panels += '<div style="' + headerStyle + '">⚡ Inverter Details</div>';
+      panels += '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(invTemp || invIntTemp, dps, '°C') + '</span><span style="' + statLbl + '">Temperature</span></div>';
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(invOutput, 0, 'W') + '</span><span style="' + statLbl + '">Output</span></div>';
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + (function() {
+        if (!invRated || fmtEntity(invRated, 0, '') === '—') return '—';
+        var rs = self._hass.states[invRated]; if (!rs) return '—';
+        var rv = parseFloat(rs.state); if (isNaN(rv)) return '—';
+        var ru = (rs.attributes.unit_of_measurement || '').toLowerCase();
+        if (ru === 'kw') return rv.toFixed(dps) + 'kW';
+        if (ru === 'mw') return (rv * 1000).toFixed(dps) + 'kW';
+        return (rv / 1000).toFixed(dps) + 'kW';
+      })() + '</span><span style="' + statLbl + '">Rated</span></div>';
+      for (var pvi = 1; pvi <= pvStrings; pvi++) {
+        var pvEnt = store ? store.getEntity('pv' + pvi + '_power') : (pvi === 1 ? pvOne : pvi === 2 ? pvTwo : '');
+        if (pvEnt) {
+          panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(pvEnt, 0, 'W') + '</span><span style="' + statLbl + '">PV' + pvi + '</span></div>';
+        }
+      }
+      if (threePhase && gridVL2 && gridVL3) {
+        panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(gridV, dps, 'V') + '</span><span style="' + statLbl + '">Grid L1</span></div>';
+        panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(gridVL2, dps, 'V') + '</span><span style="' + statLbl + '">Grid L2</span></div>';
+        panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(gridVL3, dps, 'V') + '</span><span style="' + statLbl + '">Grid L3</span></div>';
+      } else {
+        panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(gridV, dps, 'V') + '</span><span style="' + statLbl + '">Grid V</span></div>';
+      }
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(gridHz, dps, 'Hz') + '</span><span style="' + statLbl + '">Grid Hz</span></div>';
+      panels += '</div></div>';
+    }
+
+    for (var p = 1; p <= np; p++) {
+      if (!this._expanded['battery' + p]) continue;
+      var pad = p < 10 ? '0' + p : '' + p;
+      // Derive battery pack entity prefix from the configured SoC entity.
+      // Supports Gobel (_view_soc), Seplos/generic (_state_of_charge, _soc, _battery_level).
+      var packSocEntity = store ? store.getEntity('battery_pack' + p + '_soc') : '';
+      var prefix = this._derivePackPrefix(packSocEntity);
+      // Optional per-pack manual entity overrides (Settings → Entities → Battery System →
+      // Detail entity overrides). When set, they win over the auto-derived prefix — for
+      // BMS whose sibling sensors don't follow the SoC entity's naming scheme.
+      var ovEnt = function(field, derived) {
+        var o = (store && store.getEntity) ? store.getEntity('battery_pack' + p + '_' + field) : '';
+        return o || derived;
+      };
+      var cellPrefix = '';
+      if (prefix) {
+        cellPrefix = prefix.replace(/_view_$/, '_cell_voltage_');
+      }
+      var tempEntity = '';
+      if (prefix) {
+        tempEntity = prefix.replace(/_view_$/, '_temperature_01');
+      }
+      tempEntity = ovEnt('temp', tempEntity);
+      panels += '<div style="' + panelStyle + '">';
+      panels += '<div style="' + headerStyle + '">🔋 Battery ' + p + ' Details</div>';
+      if (!packSocEntity) {
+        panels += '<div style="padding:12px;color:#8892a4;font-size:12px;text-align:center;">No SoC entity configured for Pack ' + p + '.<br>Set <b>Pack ' + p + ' SoC</b> in Settings → Entities → 🔋 Battery System.</div>';
+        panels += '</div>';
+        continue;
+      }
+      panels += '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(prefix + 'soc', dps, '%') + '</span><span style="' + statLbl + '">SoC</span></div>';
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(ovEnt('soh', prefix + 'soh'), dps, '%') + '</span><span style="' + statLbl + '">SoH</span></div>';
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(ovEnt('voltage', prefix + 'voltage'), dps, 'V') + '</span><span style="' + statLbl + '">Voltage</span></div>';
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(ovEnt('current', prefix + 'current'), dps, 'A') + '</span><span style="' + statLbl + '">Current</span></div>';
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(ovEnt('power', prefix + 'power'), 0, 'W') + '</span><span style="' + statLbl + '">Power</span></div>';
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(prefix + 'cycle_number', 0, '') + '</span><span style="' + statLbl + '">Cycles</span></div>';
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(prefix + 'remain_capacity', dps, 'Ah') + '</span><span style="' + statLbl + '">Remain</span></div>';
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(prefix + 'full_capacity', dps, 'Ah') + '</span><span style="' + statLbl + '">Full Cap</span></div>';
+      // Cell voltage spread (values are in mV, convert to V)
+      var fmtCellV = function(eid) {
+        if (!self._hass || !eid) return '—';
+        var s = self._hass.states[eid];
+        if (!s || s.state === 'unavailable' || s.state === 'unknown') return '—';
+        var v = parseFloat(s.state);
+        if (isNaN(v)) return s.state;
+        return (v / 1000).toFixed(3) + 'V';
+      };
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtCellV(cellPrefix ? cellPrefix + 'min' : '') + '</span><span style="' + statLbl + '">Cell Min</span></div>';
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtCellV(cellPrefix ? cellPrefix + 'max' : '') + '</span><span style="' + statLbl + '">Cell Max</span></div>';
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(cellPrefix ? cellPrefix + 'diff' : '', 0, 'mV') + '</span><span style="' + statLbl + '">Cell Diff</span></div>';
+      // Temperature
+      var temp1 = fmtEntity(tempEntity, dps, '°C');
+      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + temp1 + '</span><span style="' + statLbl + '">Temp</span></div>';
+      panels += '</div></div>';
+    }
+    return panels;
+  }
+
   _renderImpl() {
     const store = window.SigenergyConfig;
     const packs = store ? store.getFeature('battery_packs') : (this._config.battery_packs || 2);
@@ -10086,6 +10355,7 @@ class SigenergyDeviceCard extends HTMLElement {
 
     /* ── Compact layout for narrow cards ── */
     if (this._cardWidth < 380) {
+      var self = this;
       var np = Math.max(1, Math.min(packs, 8));
       var imgSrc = _SIGENERGY_SCRIPT_DIR + 'images/1inverter' + np + 'battery.png';
       var _cBg = _t === 'light' ? '#fff' : '#1a1f2e';
@@ -10093,21 +10363,34 @@ class SigenergyDeviceCard extends HTMLElement {
       var _cPillBg = _t === 'light' ? 'rgba(255,255,255,0.94)' : 'rgba(30,35,54,0.94)';
       var _cBorder = _t === 'light' ? 'rgba(0,0,0,0.1)' : '#2d3451';
       var _cName = _t === 'light' ? '#333' : '#e0e4ec';
-      var html = '<style>:host{display:block}.card{background:var(--ha-card-background,' + _cBg + ');border-radius:16px;padding:12px;overflow:hidden;text-align:center;color:var(--primary-text-color,' + _cText + ')}.img{max-width:100%;height:auto;margin:0 auto 12px;display:block}.labels{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}.pill{background:var(--card-background-color,' + _cPillBg + ');border:1px solid var(--divider-color,' + _cBorder + ');border-radius:14px;padding:8px 14px;display:flex;align-items:center;gap:8px;min-width:0;cursor:pointer}.pill-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}.pill-name{font-size:15px;font-weight:600;color:var(--primary-text-color,' + _cName + ');white-space:nowrap}.pill-val{font-size:16px;font-weight:700;color:var(--primary-text-color,' + _cText + ');white-space:nowrap}</style>';
+      var _chev = function(dev){ return self._expanded[dev] ? '\u2039' : '\u203A'; };
+      var html = '<style>:host{display:block}.card{background:var(--ha-card-background,' + _cBg + ');border-radius:16px;padding:12px;overflow:hidden;text-align:center;color:var(--primary-text-color,' + _cText + ')}.img{max-width:100%;height:auto;margin:0 auto 12px;display:block}.labels{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}.pill{background:var(--card-background-color,' + _cPillBg + ');border:1px solid var(--divider-color,' + _cBorder + ');border-radius:14px;padding:8px 14px;display:flex;align-items:center;gap:8px;min-width:0;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;outline:none}.pill:hover{filter:brightness(1.08)}.pill:focus{outline:2px solid #00d4b8;outline-offset:2px}.pill.exp{border-color:#00d4b8 !important;box-shadow:0 0 0 1px rgba(0,212,184,0.4)}.pill-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}.pill-name{font-size:15px;font-weight:600;color:var(--primary-text-color,' + _cName + ');white-space:nowrap}.pill-val{font-size:16px;font-weight:700;color:var(--primary-text-color,' + _cText + ');white-space:nowrap}.pill-chev{font-size:15px;font-weight:700;color:#8892a4;margin-left:1px}</style>';
       html += '<div class="card">';
       html += prereqBanner;
       html += '<img class="img" src="' + imgSrc + '" alt="Battery System"/>';
       html += '<div class="labels">';
-      html += '<div class="pill" style="border-color:rgba(46,204,113,0.35)"><span class="pill-dot" style="background:#2ecc71"></span><span class="pill-name">Inverter</span><span class="pill-val">' + invFmt + '</span></div>';
+      html += '<div class="pill' + (self._expanded['inverter'] ? ' exp' : '') + '" data-device="inverter" role="button" tabindex="0" style="border-color:rgba(46,204,113,0.35)"><span class="pill-dot" style="background:#2ecc71"></span><span class="pill-name">Inverter</span><span class="pill-val">' + invFmt + '</span><span class="pill-chev">' + _chev('inverter') + '</span></div>';
       for (var i = 1; i <= np; i++) {
         var soc = packSocs[i-1];
         var col = this._socColor(soc);
         var socTxt = soc !== null ? soc.toFixed(1) + '%' : '?';
         var socPct = soc !== null ? Math.min(100, Math.max(0, soc)) : 0;
-        html += '<div class="pill" style="border-color:' + col + '35;position:relative;overflow:hidden"><div class="soc-bar" style="position:absolute;bottom:0;left:0;width:' + socPct + '%;height:3px;background:' + col + ';border-radius:0 0 14px 14px;transition:width 0.8s ease;opacity:0.7"></div><span class="pill-dot" style="background:' + col + '"></span><span class="pill-name">Batt ' + i + '</span><span class="pill-val">' + socTxt + '</span></div>';
+        var _dev = 'battery' + i;
+        html += '<div class="pill' + (self._expanded[_dev] ? ' exp' : '') + '" data-device="' + _dev + '" role="button" tabindex="0" style="border-color:' + col + '35;position:relative;overflow:hidden"><div class="soc-bar" style="position:absolute;bottom:0;left:0;width:' + socPct + '%;height:3px;background:' + col + ';border-radius:0 0 14px 14px;transition:width 0.8s ease;opacity:0.7"></div><span class="pill-dot" style="background:' + col + '"></span><span class="pill-name">Batt ' + i + '</span><span class="pill-val">' + socTxt + '</span><span class="pill-chev">' + _chev(_dev) + '</span></div>';
       }
-      html += '</div></div>';
+      html += '</div>';
+      html += this._buildDetailPanels(np, _t);
+      html += '</div>';
       this.shadowRoot.innerHTML = html;
+      // Make Inverter/Batt pills tappable to expand their detail panel (mirrors the
+      // wide-layout chevron wiring: click + touchend + keyboard, prevent bubbling).
+      var _pills = this.shadowRoot.querySelectorAll('.pill[data-device]');
+      for (var _pi = 0; _pi < _pills.length; _pi++) {
+        var _toggle = (function(el){ return function(e){ e.preventDefault(); e.stopPropagation(); var d = el.getAttribute('data-device'); if (d) { self._expanded[d] = !self._expanded[d]; self._render(); } }; })(_pills[_pi]);
+        _pills[_pi].addEventListener('click', _toggle);
+        _pills[_pi].addEventListener('touchend', _toggle);
+        _pills[_pi].addEventListener('keydown', (function(el){ return function(e){ if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); var d = el.getAttribute('data-device'); if (d) { self._expanded[d] = !self._expanded[d]; self._render(); } } }; })(_pills[_pi]));
+      }
       return;
     }
 
@@ -10211,155 +10494,16 @@ class SigenergyDeviceCard extends HTMLElement {
       var soc = packSoc !== null ? packSoc.toFixed(1) : '?';
       var col = this._socColor(packSoc);
       var side = i % 2 === 1 ? 'right' : 'left';
-      // Get temperature for this pack
-      var packTempEntity = '';
+      // Get temperature for this pack (same validated prefix as the detail panel)
       var packSocEntity = store ? store.getEntity('battery_pack' + i + '_soc') : '';
-      if (packSocEntity && packSocEntity.endsWith('_soc')) {
-        packTempEntity = packSocEntity.slice(0, -3).replace(/_view_$/, '_temperature_01');
-      }
+      var _pfx = this._derivePackPrefix(packSocEntity);
+      var packTempEntity = _pfx ? _pfx.replace(/_view_$/, '_temperature_01') : '';
       var packTemp = packTempEntity ? this._getVal(packTempEntity) : null;
       b += drawRow(mcy, 'Battery(' + i + ')', soc + '%', col, side, 'battery' + i, packSoc, packTemp);
     }
 
-    /* ── Expansion panels ── */
-    var panels = '';
-    var panelStyle = _t === 'light'
-      ? 'background:var(--card-background-color,#fff);border:1px solid var(--divider-color,#e0e0e0);border-radius:12px;padding:12px 16px;margin:8px 4px;'
-      : 'background:var(--card-background-color,rgba(30,35,54,0.96));border:1px solid var(--divider-color,#2d3451);border-radius:12px;padding:12px 16px;margin:8px 4px;';
-    var statStyle = 'display:inline-block;text-align:center;padding:6px 10px;min-width:70px;';
-    var statVal = _t === 'light'
-      ? 'font-size:18px;font-weight:700;color:var(--primary-text-color,#1a1f2e);display:block;'
-      : 'font-size:18px;font-weight:700;color:#fff;display:block;';
-    var statLbl = _t === 'light'
-      ? 'font-size:10px;color:var(--secondary-text-color,#666);text-transform:uppercase;letter-spacing:1px;'
-      : 'font-size:10px;color:#8892a4;text-transform:uppercase;letter-spacing:1px;';
-    var headerStyle = _t === 'light'
-      ? 'font-size:14px;font-weight:700;color:var(--primary-text-color,#1a1f2e);margin-bottom:8px;letter-spacing:1px;'
-      : 'font-size:14px;font-weight:700;color:#e0e4ec;margin-bottom:8px;letter-spacing:1px;';;
-    var dps = store ? (store.getDisplay('decimal_places') ?? 1) : 1; // user-configurable decimal places
-
-    var fmtEntity = function(eid, decimals, unit) {
-      if (!self._hass || !eid) return '—';
-      var s = self._hass.states[eid];
-      if (!s || s.state === 'unavailable' || s.state === 'unknown') return '—';
-      var v = parseFloat(s.state);
-      if (isNaN(v)) return s.state;
-      // Unit-aware: if caller expects W but entity reports kW, convert
-      var entityUnit = (s.attributes.unit_of_measurement || '').toLowerCase();
-      if (unit === 'W' || unit === 'w') {
-        if (entityUnit === 'kw') { v = v * 1000; }
-        else if (entityUnit === 'mw') { v = v * 1000000; }
-      }
-      return v.toFixed(decimals !== undefined ? decimals : 1) + (unit || '');
-    };
-
-    if (this._expanded['inverter']) {
-      // FIX(bug4): Read entity IDs from config store instead of hardcoding Deye names
-      var invTemp = store ? store.getEntity('inverter_temp') : '';
-      var invIntTemp = store ? store.getEntity('inverter_internal_temp') : '';
-      var invOutput = store ? store.getEntity('inverter_output_power') : '';
-      var invRated = store ? store.getEntity('inverter_rated_power') : '';
-      var pvOne = store ? store.getEntity('pv1_power') : '';
-      var pvTwo = store ? store.getEntity('pv2_power') : '';
-      var pvStrings = store ? (store.getFeature && store.getFeature('pv_strings')) || 2 : 2;
-      var gridV = store ? store.getEntity('grid_voltage') : '';
-      var gridHz = store ? store.getEntity('grid_frequency') : '';
-      var gridVL2 = store ? store.getEntity('grid_voltage_l2') : '';
-      var gridVL3 = store ? store.getEntity('grid_voltage_l3') : '';
-      var threePhase = store ? (store.getFeature && store.getFeature('three_phase')) : false;
-      panels += '<div style="' + panelStyle + '">';
-      panels += '<div style="' + headerStyle + '">⚡ Inverter Details</div>';
-      panels += '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(invTemp || invIntTemp, dps, '°C') + '</span><span style="' + statLbl + '">Temperature</span></div>';
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(invOutput, 0, 'W') + '</span><span style="' + statLbl + '">Output</span></div>';
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + (function() {
-        if (!invRated || fmtEntity(invRated, 0, '') === '—') return '—';
-        var rs = self._hass.states[invRated]; if (!rs) return '—';
-        var rv = parseFloat(rs.state); if (isNaN(rv)) return '—';
-        var ru = (rs.attributes.unit_of_measurement || '').toLowerCase();
-        if (ru === 'kw') return rv.toFixed(dps) + 'kW';
-        if (ru === 'mw') return (rv * 1000).toFixed(dps) + 'kW';
-        return (rv / 1000).toFixed(dps) + 'kW';
-      })() + '</span><span style="' + statLbl + '">Rated</span></div>';
-      for (var pvi = 1; pvi <= pvStrings; pvi++) {
-        var pvEnt = store ? store.getEntity('pv' + pvi + '_power') : (pvi === 1 ? pvOne : pvi === 2 ? pvTwo : '');
-        if (pvEnt) {
-          panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(pvEnt, 0, 'W') + '</span><span style="' + statLbl + '">PV' + pvi + '</span></div>';
-        }
-      }
-      if (threePhase && gridVL2 && gridVL3) {
-        panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(gridV, dps, 'V') + '</span><span style="' + statLbl + '">Grid L1</span></div>';
-        panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(gridVL2, dps, 'V') + '</span><span style="' + statLbl + '">Grid L2</span></div>';
-        panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(gridVL3, dps, 'V') + '</span><span style="' + statLbl + '">Grid L3</span></div>';
-      } else {
-        panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(gridV, dps, 'V') + '</span><span style="' + statLbl + '">Grid V</span></div>';
-      }
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(gridHz, dps, 'Hz') + '</span><span style="' + statLbl + '">Grid Hz</span></div>';
-      panels += '</div></div>';
-    }
-
-    for (var p = 1; p <= np; p++) {
-      if (!this._expanded['battery' + p]) continue;
-      var pad = p < 10 ? '0' + p : '' + p;
-      // Derive battery pack entity prefix from the configured SoC entity.
-      // Supports Gobel (_view_soc), Seplos/generic (_state_of_charge, _soc, _battery_level).
-      var packSocEntity = store ? store.getEntity('battery_pack' + p + '_soc') : '';
-      var prefix = '';
-      if (packSocEntity) {
-        var _sfx = ['_view_soc', '_state_of_charge', '_battery_soc', '_battery_level', '_soc_percent', '_soc'];
-        for (var _si = 0; _si < _sfx.length; _si++) {
-          if (packSocEntity.endsWith(_sfx[_si])) {
-            prefix = packSocEntity.slice(0, -_sfx[_si].length) + '_';
-            break;
-          }
-        }
-        if (!prefix) {
-          // Fallback: strip everything after the last underscore
-          var _lu = packSocEntity.lastIndexOf('_');
-          if (_lu > 0) prefix = packSocEntity.slice(0, _lu + 1);
-        }
-      }
-      var cellPrefix = '';
-      if (prefix) {
-        cellPrefix = prefix.replace(/_view_$/, '_cell_voltage_');
-      }
-      var tempEntity = '';
-      if (prefix) {
-        tempEntity = prefix.replace(/_view_$/, '_temperature_01');
-      }
-      panels += '<div style="' + panelStyle + '">';
-      panels += '<div style="' + headerStyle + '">🔋 Battery ' + p + ' Details</div>';
-      if (!packSocEntity) {
-        panels += '<div style="padding:12px;color:#8892a4;font-size:12px;text-align:center;">No SoC entity configured for Pack ' + p + '.<br>Set <b>Pack ' + p + ' SoC</b> in Settings → Entities → 🔋 Battery System.</div>';
-        panels += '</div>';
-        continue;
-      }
-      panels += '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(prefix + 'soc', dps, '%') + '</span><span style="' + statLbl + '">SoC</span></div>';
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(prefix + 'soh', dps, '%') + '</span><span style="' + statLbl + '">SoH</span></div>';
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(prefix + 'voltage', dps, 'V') + '</span><span style="' + statLbl + '">Voltage</span></div>';
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(prefix + 'current', dps, 'A') + '</span><span style="' + statLbl + '">Current</span></div>';
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(prefix + 'power', 0, 'W') + '</span><span style="' + statLbl + '">Power</span></div>';
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(prefix + 'cycle_number', 0, '') + '</span><span style="' + statLbl + '">Cycles</span></div>';
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(prefix + 'remain_capacity', dps, 'Ah') + '</span><span style="' + statLbl + '">Remain</span></div>';
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(prefix + 'full_capacity', dps, 'Ah') + '</span><span style="' + statLbl + '">Full Cap</span></div>';
-      // Cell voltage spread (values are in mV, convert to V)
-      var fmtCellV = function(eid) {
-        if (!self._hass || !eid) return '—';
-        var s = self._hass.states[eid];
-        if (!s || s.state === 'unavailable' || s.state === 'unknown') return '—';
-        var v = parseFloat(s.state);
-        if (isNaN(v)) return s.state;
-        return (v / 1000).toFixed(3) + 'V';
-      };
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtCellV(cellPrefix ? cellPrefix + 'min' : '') + '</span><span style="' + statLbl + '">Cell Min</span></div>';
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtCellV(cellPrefix ? cellPrefix + 'max' : '') + '</span><span style="' + statLbl + '">Cell Max</span></div>';
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + fmtEntity(cellPrefix ? cellPrefix + 'diff' : '', 0, 'mV') + '</span><span style="' + statLbl + '">Cell Diff</span></div>';
-      // Temperature
-      var temp1 = fmtEntity(tempEntity, dps, '°C');
-      panels += '<div style="' + statStyle + '"><span style="' + statVal + '">' + temp1 + '</span><span style="' + statLbl + '">Temp</span></div>';
-      panels += '</div></div>';
-    }
+    /* ── Expansion panels (shared by wide + compact layouts) ── */
+    var panels = this._buildDetailPanels(np, _t);
 
     var _wBg = _t === 'light' ? '#fff' : '#1a1f2e';
     var _wText = _t === 'light' ? '#1a1f2e' : '#fff';
@@ -10728,7 +10872,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c GENERGY-DASHBOARD %c v2.23.0-pre.1 ',
+  '%c GENERGY-DASHBOARD %c v2.23.1 ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
@@ -10739,7 +10883,7 @@ console.info(
 // No setTimeout — injects immediately via MutationObserver
 // ═══════════════════════════════════════════════════════════
 (function() {
-  var RESPONSIVE_CSS = [
+  var RESPONSIVE_CSS_DEFAULT = [
     '/* Mobile + Tablet portrait: 1 column, all items stacked */',
     '@media (max-width: 1024px) {',
     '  :host { overflow-x: hidden !important; max-width: 100vw !important; }',
@@ -10772,6 +10916,50 @@ console.info(
     '  #root { grid-gap: 16px !important; }',
     '}'
   ].join('\n');
+
+  // Battery-stack variant (6 direct #root children: house|sankey|battery|divider|chart|insights).
+  // Every child keeps min-width:0 + overflow:hidden so the sankey never forces overflow
+  // (proven identical in Chromium + WebKit). Column control lives entirely in these plain
+  // injected @media rules — no nested layout-card mediaquery (that was the Safari failure).
+  var RESPONSIVE_CSS_BATTERY = [
+    '@media (max-width: 1024px) {',
+    '  :host { overflow-x: hidden !important; max-width: 100vw !important; }',
+    '  #root { grid-template-columns: 1fr !important; grid-template-rows: repeat(12, auto) !important; overflow-x: hidden !important; max-width: 100% !important; box-sizing: border-box !important; }',
+    '  #root > * { grid-column: 1 !important; grid-row: auto !important; min-width: 0 !important; max-width: 100% !important; overflow: hidden !important; box-sizing: border-box !important; }',
+    '}',
+    '/* Tablet / small desktop: house|sankey side by side, everything else full width below */',
+    '@media (min-width: 1025px) and (max-width: 1499px) {',
+    '  #root { grid-template-columns: 1fr 1fr !important; }',
+    '  #root > *:nth-child(1) { grid-column: 1 !important; grid-row: 1 !important; }',
+    '  #root > *:nth-child(2) { grid-column: 2 !important; grid-row: 1 !important; }',
+    '  #root > *:nth-child(n+3) { grid-column: 1 / -1 !important; }',
+    '  #root > * { min-width: 0 !important; overflow: hidden !important; box-sizing: border-box !important; }',
+    '}',
+    '/* Desktop >=1500: 3 columns (house|sankey|battery), rest full width below */',
+    '@media (min-width: 1500px) {',
+    '  #root { grid-template-columns: minmax(300px, 0.8fr) minmax(440px, 1.2fr) minmax(400px, 1.05fr) !important; grid-template-rows: auto !important; }',
+    '  #root > *:nth-child(1) { grid-column: 1 !important; grid-row: 1 !important; }',
+    '  #root > *:nth-child(2) { grid-column: 2 !important; grid-row: 1 !important; }',
+    '  #root > *:nth-child(3) { grid-column: 3 !important; grid-row: 1 !important; }',
+    '  #root > *:nth-child(n+4) { grid-column: 1 / -1 !important; }',
+    '  #root > * { min-width: 0 !important; overflow: hidden !important; box-sizing: border-box !important; }',
+    '}',
+    '@media (min-width: 1800px) { #root { grid-gap: 14px !important; } }',
+    '@media (min-width: 2400px) { #root { grid-gap: 16px !important; } }'
+  ].join('\n');
+
+  // Read the flag from the PERSISTED config (not a build-time global) so a fresh page
+  // load — which renders the saved lovelace config WITHOUT calling _buildDashboard —
+  // still picks the variant matching the persisted DOM. OFF returns the byte-identical
+  // original CSS (the safety anchor: OFF users are untouched).
+  function buildResponsiveCSS() {
+    var showBattery = false;
+    try {
+      var c = window.SigenergyConfig && window.SigenergyConfig.get && window.SigenergyConfig.get();
+      showBattery = !!(c && c.display && c.display.show_battery_stack);
+    } catch (e) {}
+    return showBattery ? RESPONSIVE_CSS_BATTERY : RESPONSIVE_CSS_DEFAULT;
+  }
 
   function injectResponsiveCSS() {
     function findDeep(root, tag) {
@@ -10806,17 +10994,22 @@ console.info(
         }
         node = host;
       }
+      var css = buildResponsiveCSS();
       var existing = gl.shadowRoot.querySelector('#sigenergy-responsive-fix');
       if (existing) {
-        existing.textContent = RESPONSIVE_CSS;
+        existing.textContent = css;
       } else {
         var style = document.createElement('style');
         style.id = 'sigenergy-responsive-fix';
-        style.textContent = RESPONSIVE_CSS;
+        style.textContent = css;
         gl.shadowRoot.appendChild(style);
       }
     });
   }
+
+  // Expose so the Display-tab toggle can re-fire injection live (on->off->on without
+  // a reload) after _buildDashboard restructures the cards.
+  window._sigenergyReinjectResponsive = injectResponsiveCSS;
 
   // Inject immediately on script load
   injectResponsiveCSS();

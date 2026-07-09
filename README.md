@@ -7,6 +7,8 @@
 
 A fully configurable Home Assistant Lovelace dashboard for monitoring solar, battery, and grid energy systems. Features animated power flow visualization, real-time energy charts with EMHASS, HAEO, and Energy Manager forecast overlays, battery pack monitoring, and a 4-tab settings UI for complete customization — no YAML editing required.
 
+> **New in `v2.23.1`**: an optional **Show Battery Stack on Dashboard** toggle (adds the battery pack stack as a third column beside the Sankey on wide screens, responsive/Safari-safe), optional **per-pack battery detail entity overrides** (up to 8 packs), smarter **battery detail auto-detection** (fixes "—" rows on BMS like Gobel), **conditional EV charger cards** (no more "Not configured" placeholders), tap-to-expand battery pills on mobile, and a Sankey label-alignment fix.
+>
 > **New in `v2.23.0`**: **two AC EV chargers** with a per-vehicle Power/SoC/Range/State panel, **interactive Sankey stream modals** (click any energy-flow node for a where-it-went / where-it-came-from breakdown), native **HAEO & Energy Manager event cards**, an **Energy Manager (Node-RED)** EMS provider, configurable Solar/Home/Grid labels, daily cost/revenue without an EMS, interactive house-card detail modals, smart-load modal controls, draggable label positions, and a fix for the false-positive "HTML Template Card missing" notification.
 
 > **Inverter-agnostic**: Works with **any** solar/battery inverter (Deye, SunSynk, Sigenergy, Huawei, Fronius, SolarEdge, Enphase, etc.) — just map your entity IDs in the Settings tab.
