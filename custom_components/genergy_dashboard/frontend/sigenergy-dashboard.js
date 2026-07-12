@@ -178,6 +178,12 @@ const DEFAULT_CONFIG = {
     // node + the unprefixed ev_* entities; EV 2 (and the per-EV stats panel)
     // appear when this is 2. See ev2_* entities.
     num_ev_chargers: 1,
+    // Two-garage house scene for a 2nd EV (needs the two-EV asset pack + num_ev_chargers=2).
+    two_ev_garage: false,
+    // Where EV info is surfaced. Panel = the per-EV stat cards below the house; labels = the
+    // EV 1/EV 2 text on the house scene. Both on by default.
+    ev_show_panel: true,
+    ev_show_labels: true,
     heat_pump: false,
     grid_connection: true,
     hide_cables: false,
@@ -1298,30 +1304,62 @@ document.addEventListener('genergy-modal', (e) => {
         return;
       }
 
-      // Save original parent and next sibling so we can restore on close
+      // Save original parent + style so we can restore on close
       const origParent = apexEl.parentElement;
-      const origNextSibling = apexEl.nextSibling;
       const origStyle = apexEl.getAttribute('style') || '';
 
-      // Create a placeholder to hold its place in the layout
+      // Create a placeholder to hold its place in the layout (marks the exact slot)
       const placeholder = document.createElement('div');
       placeholder.style.cssText = `height:${apexEl.offsetHeight}px;`;
       origParent?.insertBefore(placeholder, apexEl);
+
+      // Captured when we expand, so onClose can undo the inline graph-wrapper height.
+      let _graphDiv = null, _graphOrigH = '', _graphOrigMinH = '';
 
       const m = new GenergyModal({
         title: 'Energy Forecast Chart',
         icon: 'mdi:chart-areaspline',
         size: 'fullscreen',
         onClose: () => {
-          // Restore chart to original position
-          apexEl.setAttribute('style', origStyle);
-          origParent?.insertBefore(apexEl, placeholder.nextSibling === origNextSibling ? placeholder : origNextSibling);
-          placeholder.remove();
-          // Reset chart height via its apexChart instance
           try {
+            apexEl.setAttribute('style', origStyle);
+            // Restore to the original slot ONLY if it still exists. A dashboard rebuild
+            // (e.g. Save/Apply, auto-refresh) while the modal was open replaces the stack,
+            // so the fresh chart is already in place — reinserting the stale one there is
+            // what left an orphan + "Configuration error". In that case just drop it.
+            if (placeholder.isConnected && placeholder.parentNode) {
+              placeholder.parentNode.insertBefore(apexEl, placeholder);
+              placeholder.remove();
+            } else if (placeholder.parentNode) {
+              placeholder.remove();
+            }
+            // Nudge apex to recompute size for the restored (smaller) container.
+            // NOTE: coerce to a NUMBER — apex's programmatic updateOptions wants a number;
+            // a '500px' string is silently ignored and it keeps the stale 650 expand height.
+            const cfgH = apexEl._config?.apex_config?.chart?.height;
+            const restoreH = (typeof cfgH === 'string' ? parseInt(cfgH, 10) : cfgH) || 500;
             const h = apexEl._apexChart;
-            if (h?.updateOptions) h.updateOptions({ chart: { height: apexEl._config?.apex_config?.chart?.height || 500 } }, false, false);
-          } catch(e) {}
+            if (h?.updateOptions) h.updateOptions({ chart: { height: restoreH } }, false, false);
+            try { window.dispatchEvent(new Event('resize')); } catch(e) {}
+            // CRITICAL ORDERING: apex re-lays-out the #graph wrapper asynchronously in
+            // REACTION to updateOptions + resize above, re-stamping it with the expand
+            // height (that's why last session's "restore before updateOptions" left the
+            // 650px gap: the clear happened, then apex clobbered it). So clear the wrapper
+            // AFTER apex settles, across a double-rAF, and re-query #graph LIVE each time
+            // (updateOptions can recreate the node, orphaning the captured _graphDiv).
+            const clearGraphWrapper = () => {
+              const gd = apexEl.shadowRoot?.querySelector('#graph');
+              if (gd) {
+                gd.style.height = _graphOrigH;
+                gd.style.minHeight = _graphOrigMinH;
+              }
+            };
+            clearGraphWrapper();
+            requestAnimationFrame(() => {
+              clearGraphWrapper();
+              requestAnimationFrame(clearGraphWrapper);
+            });
+          } catch (e) { console.warn('genergy-modal forecast-chart: restore failed', e); }
         },
       });
 
@@ -1335,7 +1373,14 @@ document.addEventListener('genergy-modal', (e) => {
         requestAnimationFrame(() => {
           try {
             const graphDiv = apexEl.shadowRoot?.querySelector('#graph');
-            if (graphDiv) { graphDiv.style.height = expandH + 'px'; graphDiv.style.minHeight = expandH + 'px'; }
+            if (graphDiv) {
+              // Remember the pre-expand inline values so onClose restores them exactly.
+              _graphDiv = graphDiv;
+              _graphOrigH = graphDiv.style.height || '';
+              _graphOrigMinH = graphDiv.style.minHeight || '';
+              graphDiv.style.height = expandH + 'px';
+              graphDiv.style.minHeight = expandH + 'px';
+            }
             const chart = apexEl._apexChart;
             if (chart?.updateOptions) chart.updateOptions({ chart: { height: expandH } }, false, false);
           } catch(e) {}
@@ -1420,10 +1465,14 @@ document.addEventListener('genergy-label-editor-save', async (e) => {
 
 document.addEventListener('genergy-asset-position-save', async (e) => {
   const pos = e.detail?.heat_pump_position;
-  if (!pos) return;
+  const evPos = e.detail?.ev_charger_position;
+  const ev2Pos = e.detail?.ev2_charger_position;
+  if (!pos && !evPos && !ev2Pos) return;
   const store = window.SigenergyConfig;
   const cfg = store?.get?.() || {};
-  cfg.heat_pump_position = pos;
+  if (pos) cfg.heat_pump_position = pos;
+  if (evPos) cfg.ev_charger_position = evPos;
+  if (ev2Pos) cfg.ev2_charger_position = ev2Pos;
   store?.save?.(cfg);
   const hass = e.detail?.hass || store?._hass;
   if (!hass?.callWS) return;
@@ -1432,7 +1481,9 @@ document.addEventListener('genergy-asset-position-save', async (e) => {
     const patch = (obj) => {
       if (!obj || typeof obj !== 'object') return false;
       if (obj.type === 'custom:sigenergy-house-card') {
-        obj.heat_pump_position = pos;
+        if (pos) obj.heat_pump_position = pos;
+        if (evPos) obj.ev_charger_position = evPos;
+        if (ev2Pos) obj.ev2_charger_position = ev2Pos;
         obj.edit_assets = false;
         return true;
       }
@@ -2797,7 +2848,7 @@ class SigenergySettingsCard extends HTMLElement {
         ${this._entityRow('Charger State', 'ev2_charger_state', e)}
         ${this._entityRow('EV SoC', 'ev2_soc', e)}
         ${this._entityRow('EV Range', 'ev2_range', e)}
-        <div style="font-size:9px;color:#666;padding:0 0 4px 4px;">EV 2 shows in the <b>EV Chargers</b> panel (Power / SoC / Range / State). Only EV 1 has a garage node on the house card.</div>
+        <div style="font-size:9px;color:#666;padding:0 0 4px 4px;">EV 2 shows in the <b>EV Chargers</b> panel (Power / SoC / Range / State), and — with the <b>Two-Garage House Scene</b> enabled (Features tab) — also gets its own bay, car and charger on the house card.</div>
       </div>
       ` : ''}
       <div class="section" style="border:1px solid ${cfg.features?.show_hp_in_sankey ? '#e67e22' : '#2d3451'};border-radius:12px;padding:12px;transition:all 0.3s;">
@@ -4879,7 +4930,10 @@ class SigenergySettingsCard extends HTMLElement {
             ${[1,2].map(n => `<option value="${n}" ${(f.num_ev_chargers || 1) == n ? 'selected' : ''}>${n} charger${n > 1 ? 's' : ''}</option>`).join('')}
           </select>
         </div>
-        <div style="font-size:10px;color:#666;padding:0 0 6px 4px;">Set to <b>2</b> to add a second AC EV charger. EV 2 gets its own entity config on the Entities tab and appears in the <b>EV Chargers</b> panel (Power / SoC / Range / State). Only EV 1 has the garage car node on the house card.</div>
+        <div style="font-size:10px;color:#666;padding:0 0 6px 4px;">Set to <b>2</b> to add a second AC EV charger. EV 2 gets its own entity config on the Entities tab and appears in the <b>EV Chargers</b> panel (Power / SoC / Range / State). By default only EV 1 has a garage car node on the house card — enable the two-garage scene below to add a second.</div>
+        ${(f.num_ev_chargers || 1) >= 2 ? this._toggleHtml('Two-Garage House Scene (EV 2)', 'Switch the house to the two-car garage scene: a second bay, car and AC charger for EV 2 that appear when it is connected/charging. Fine-tune the 2nd charger (Asset editor), its cable (Cable editor) and the EV labels (Label editor).', 'two_ev_garage', f.two_ev_garage) : ''}
+        ${(f.num_ev_chargers || 1) >= 2 ? this._toggleHtml('Show EV Chargers Panel', 'Show the per-EV stat cards (Power / SoC / Range / State) below the house card. Turn off to rely on the house-card EV labels only.', 'ev_show_panel', f.ev_show_panel !== false) : ''}
+        ${this._toggleHtml('Show EV Labels on House', 'Show the EV 1 / EV 2 text labels on the house scene. Turn off for a cleaner house — the stats stay in the EV Chargers panel.', 'ev_show_labels', f.ev_show_labels !== false)}
         <div style="margin-bottom:8px;padding:8px;background:rgba(232,112,90,0.08);border:1px solid rgba(232,112,90,0.2);border-radius:8px;">
           <div style="font-size:11px;font-weight:600;color:#E8705A;margin-bottom:4px;">EV display modes</div>
           <div style="font-size:10px;color:#8892a4;line-height:1.45;">Use <b>Auto EV</b> when you have a charger state/power entity. It dynamically shows/hides the car, EV charger image, EV cable line, charging dots, and EV labels. Use the manual toggles only when you want the EV visuals to stay visible without auto detection.</div>
@@ -4970,10 +5024,10 @@ class SigenergySettingsCard extends HTMLElement {
       </div>
       <div class="section">
         <div class="section-title">🛠️ Developer</div>
-        ${this._toggleHtml('Cable Path Editor', 'Drag-to-position cable routing overlay on house card (for layout customization)', 'path_editor', this._pathEditorOn)}
+        ${this._toggleHtml('Cable Path Editor', 'Drag the flow-cable routing on the house card — Solar, Home, Battery, Grid, EV, Heat Pump, plus the EV 2 cable in two-garage mode. While editing, house clicks route to the editor (no detail modals).', 'path_editor', this._pathEditorOn)}
         ${this._toggleHtml('Clickable Zone Editor', 'Drag and resize the transparent regions used by house-card modal clicks', 'zone_editor', this._zoneEditorOn)}
-        ${this._toggleHtml('Label Position Editor', 'Drag the house-card labels and live values (Solar, Home, Battery, Grid, EV, Heat Pump)', 'label_editor', this._labelEditorOn)}
-        ${this._toggleHtml('Asset Position Editor', 'Drag and adjust perspective/size of the heat pump image on the house card', 'asset_editor', this._assetEditorOn)}
+        ${this._toggleHtml('Label Position Editor', 'Drag the house-card labels and live values (Solar, Home, Battery, Grid, EV 1, EV 2, Heat Pump)', 'label_editor', this._labelEditorOn)}
+        ${this._toggleHtml('Asset Position Editor', 'Drag to reposition house-card images: the heat pump (with size/perspective controls) and — in two-garage mode — each AC charger via its 🔌 handle. Save Position to persist.', 'asset_editor', this._assetEditorOn)}
       </div>
     `;
 
@@ -5337,7 +5391,11 @@ class SigenergySettingsCard extends HTMLElement {
   _renderSmartLoadList(cfg) {
     const loads = cfg.smart_loads || [];
     if (!loads.length) {
-      return '<div style="font-size:11px;color:#666;text-align:center;padding:12px;">No smart loads configured. Use Auto-Detect or Add Manual.</div>';
+      return `<div style="margin:6px 0 2px;padding:14px 16px;background:linear-gradient(135deg,rgba(0,212,184,0.10),rgba(63,81,181,0.10));border:1px solid rgba(0,212,184,0.45);border-radius:10px;text-align:center;">
+        <div style="font-size:22px;line-height:1;margin-bottom:6px;">🔌</div>
+        <div style="font-size:13px;font-weight:700;color:var(--primary-text-color,#e0e4ec);margin-bottom:4px;">No smart loads configured yet</div>
+        <div style="font-size:11px;color:var(--secondary-text-color,#8892a4);line-height:1.5;">Click <b style="color:#00d4b8;">🔍 Auto-Detect</b> to find appliances from your HA Energy Dashboard, or <b style="color:#7c8cf8;">➕ Add Manual</b> to add one yourself.</div>
+      </div>`;
     }
     const types = window.__sigApplianceTypes || [];
     const imgBase = _SIGENERGY_SCRIPT_DIR + 'images/smart_load/';
@@ -6404,32 +6462,11 @@ return forecast.map(function(d) {
       // Theme-aware card style — resolves 'auto' / 'dark' / 'light'
       const _resolvedTheme = this._resolveTheme();
 
-      // Compute sunrise/sunset xaxis annotations from sun.sun entity
-      const _sunXAnnotations = [];
-      const _sunEntity = this._hass?.states?.['sun.sun'];
-      if (f.sunrise_sunset && _sunEntity?.attributes?.next_rising && _sunEntity?.attributes?.next_setting) {
-        const _nextRise = new Date(_sunEntity.attributes.next_rising);
-        const _nextSet = new Date(_sunEntity.attributes.next_setting);
-        const _todayUtc = new Date().toISOString().slice(0, 10);
-        // If next event is tomorrow (UTC date differs), today's was 24h earlier
-        const _todayRise = _nextRise.toISOString().slice(0, 10) === _todayUtc
-          ? _nextRise : new Date(_nextRise.getTime() - 86400000);
-        const _todaySet = _nextSet.toISOString().slice(0, 10) === _todayUtc
-          ? _nextSet : new Date(_nextSet.getTime() - 86400000);
-        const _fmt = (d) => d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-        const _sunAnno = (ts, text, clr) => ({
-          x: ts, borderColor: clr, strokeDashArray: 4,
-          label: { text, borderColor: clr, orientation: 'horizontal', position: 'top',
-            style: { color: '#fff', background: clr, fontSize: '9px', padding: { left: 3, right: 3, top: 1, bottom: 1 } } }
-        });
-        // Yesterday, today, tomorrow sunrise/sunset (covers 48h span)
-        for (const offset of [-86400000, 0, 86400000]) {
-          const r = new Date(_todayRise.getTime() + offset);
-          const s = new Date(_todaySet.getTime() + offset);
-          _sunXAnnotations.push(_sunAnno(r.getTime(), '☀ ' + _fmt(r), offset === 0 ? 'rgba(255,165,0,0.6)' : 'rgba(255,165,0,0.35)'));
-          _sunXAnnotations.push(_sunAnno(s.getTime(), '🌙 ' + _fmt(s), offset === 0 ? 'rgba(100,80,180,0.6)' : 'rgba(100,80,180,0.35)'));
-        }
-      }
+      // Sunrise/sunset xaxis annotations from sun.sun. Built via the shared helper so
+      // the self-refresh updater (bottom of file) emits a byte-identical annotation set.
+      // NOTE: these get baked into the SAVED lovelace config; the updater keeps them
+      // from going a day stale on a fresh load (see _sigSunAnnotationRefresh).
+      const _sunXAnnotations = window.genergyBuildSunAnnotations(this._hass?.states?.['sun.sun'], f.sunrise_sunset);
 
       const _apexCardModStyle = _resolvedTheme === 'light'
         ? 'ha-card { background: var(--ha-card-background, rgba(255,255,255,0.95)) !important; border: 1px solid var(--divider-color, rgba(0,0,0,0.08)) !important; border-radius: var(--ha-card-border-radius, 16px) !important; color: var(--primary-text-color, #1a1f2e); box-shadow: 0 2px 12px rgba(0,0,0,0.06) !important; } .apexcharts-tooltip { background: rgba(255,255,255,0.96) !important; border: 1px solid rgba(0,212,184,0.25) !important; border-radius: 8px !important; color: #333 !important; font-size: 12px !important; backdrop-filter: blur(8px) !important; box-shadow: 0 4px 16px rgba(0,0,0,0.1) !important; } .apexcharts-tooltip-title { background: rgba(0,212,184,0.08) !important; border-bottom: 1px solid rgba(0,212,184,0.15) !important; color: #1a1f2e !important; font-weight: 600 !important; } .apexcharts-toolbar { top: 4px !important; right: 4px !important; } .apexcharts-toolbar svg { fill: rgba(0,0,0,0.4) !important; } .apexcharts-toolbar svg:hover { fill: #00b89c !important; } .apexcharts-legend-series { display: inline-flex !important; align-items: center !important; gap: 4px !important; } .apexcharts-legend-text:empty { display: none !important; } .apexcharts-legend-text:empty + .apexcharts-legend-marker, .apexcharts-legend-series:has(.apexcharts-legend-text:empty) { display: none !important; } @media (max-width: 600px) { .apexcharts-legend-text { font-size: 13px !important; } .apexcharts-legend-marker { width: 10px !important; height: 10px !important; } }'
@@ -6782,8 +6819,12 @@ return forecast.map(function(d) {
         sun: 'sun.sun',
         ev_charger_power: e.ev_charger_power || '',
         ev_charger_state: e.ev_charger_state || '',
+        ev2_charger_power: e.ev2_charger_power || '',
+        ev2_charger_state: e.ev2_charger_state || '',
         ev_soc: e.ev_soc || '',
         ev_range: e.ev_range || '',
+        ev2_soc: e.ev2_soc || '',
+        ev2_range: e.ev2_range || '',
         weather: e.weather || '',
         heat_pump_power: e.heat_pump_power || e.deferrable0_power || '',
         battery_capacity: e.battery_capacity || '',
@@ -6821,6 +6862,10 @@ return forecast.map(function(d) {
       houseCardOrig.features.ev_vehicle = f.ev_vehicle || false;
       houseCardOrig.features.ev_vehicle_auto = f.ev_vehicle_auto || false;
       houseCardOrig.features.ev_vehicle_power_threshold = f.ev_vehicle_power_threshold ?? 100;
+      // Two-garage house scene — only active with a 2nd EV enabled AND the two-EV
+      // asset pack installed (user opts in via the toggle). Inert otherwise.
+      houseCardOrig.features.two_ev_garage = !!(f.two_ev_garage && (f.num_ev_chargers || 1) >= 2);
+      houseCardOrig.features.ev_show_labels = f.ev_show_labels !== false;
       houseCardOrig.features.heat_pump = f.heat_pump || false;
       houseCardOrig.features.grid = f.grid_connection !== false;
       houseCardOrig.features.hide_cables = f.hide_cables || false;
@@ -6829,6 +6874,8 @@ return forecast.map(function(d) {
       if (cfg.click_zones) houseCardOrig.click_zones = cfg.click_zones;
       if (cfg.label_positions) houseCardOrig.label_positions = cfg.label_positions;
       if (cfg.heat_pump_position) houseCardOrig.heat_pump_position = cfg.heat_pump_position;
+      if (cfg.ev_charger_position) houseCardOrig.ev_charger_position = cfg.ev_charger_position;
+      if (cfg.ev2_charger_position) houseCardOrig.ev2_charger_position = cfg.ev2_charger_position;
       // Sigenergy convention: positive battery_power = charging
       houseCardOrig.battery_positive_charging = (f.battery_positive_charging !== false);
       // Battery label override (e.g. "SigenStor", "Huawei LUNA", "PowerWall")
@@ -6869,19 +6916,32 @@ return forecast.map(function(d) {
       // least one entity CONFIGURED (no "Not configured" placeholders), and each card is
       // dynamically hidden (HA visibility conditions) when its charger is DISCONNECTED /
       // unavailable, so an absent/idle EV doesn't occupy the panel.
-      if ((f.num_ev_chargers || 1) >= 2) {
+      if ((f.num_ev_chargers || 1) >= 2 && f.ev_show_panel !== false) {
+        // Green when charging above the same threshold that shows the car on the house card
+        // (was a hardcoded 50 W — kept in sync so the panel icon and the house scene agree).
+        const _evThreshold = f.ev_vehicle_power_threshold ?? 100;
         const _evColorTpl = (powerId) => powerId
           ? "{% set u = (state_attr('" + powerId + "','unit_of_measurement') or 'W') | string %}" +
             "{% set r = states('" + powerId + "') | float(0) %}" +
             "{% set w = r*1000 if u in ['kW','KW'] else r*1000000 if u=='MW' else r %}" +
-            "{{ 'green' if w > 50 else 'blue-grey' }}"
+            "{{ 'green' if w > " + _evThreshold + " else 'blue-grey' }}"
           : 'blue-grey';
         const _evSecondaryTpl = (d) => {
           const parts = [];
           if (d.power) parts.push(_powerTpl(d.power));
           if (d.soc) parts.push("{{ states('" + d.soc + "') | round(0) }}%");
           if (d.range) parts.push("{{ states('" + d.range + "') | round(0) }} {{ state_attr('" + d.range + "','unit_of_measurement') or 'km' }}");
-          if (d.state) parts.push("{{ states('" + d.state + "') }}");
+          // Status: derive from power so it never says "Charging" at ~0 W. Above the threshold
+          // → "Charging"; otherwise "Connected" (the card only renders while connected). Falls
+          // back to the raw charger-state entity only when no power entity is configured.
+          if (d.power) {
+            parts.push("{% set u = (state_attr('" + d.power + "','unit_of_measurement') or 'W') | string %}" +
+              "{% set r = states('" + d.power + "') | float(0) %}" +
+              "{% set w = r*1000 if u in ['kW','KW'] else r*1000000 if u=='MW' else r %}" +
+              "{{ 'Charging' if w > " + _evThreshold + " else 'Connected' }}");
+          } else if (d.state) {
+            parts.push("{{ states('" + d.state + "') }}");
+          }
           return parts.join('  ·  ');
         };
         const _evDefs = [
@@ -6930,13 +6990,34 @@ return forecast.map(function(d) {
         if (emsP === 'haeo') {
           modalTitle = '📊 HAEO Forecasts';
           const haeoConfig = { type: 'custom:haeo-events-card' };
-          if (e.haeo_battery_charge || e.haeo_battery_discharge) haeoConfig.entity_battery = e.haeo_battery_charge || e.haeo_battery_discharge;
-          if (e.haeo_grid_power) haeoConfig.entity_grid = e.haeo_grid_power;
-          if (e.haeo_load_power) haeoConfig.entity_load = e.haeo_load_power;
-          if (e.haeo_solar_power) haeoConfig.entity_solar = e.haeo_solar_power;
-          if (e.haeo_battery_soc) haeoConfig.entity_soc = e.haeo_battery_soc;
-          if (e.haeo_import_price) haeoConfig.entity_buy_price = e.haeo_import_price;
-          if (e.haeo_export_price) haeoConfig.entity_sell_price = e.haeo_export_price;
+          // HAEO Events Card v3+ resolves entities via `entity_haeo_<key>` (was `entity_<key>`
+          // pre-v3 — see the card's _eid()/_HAEO_DEFAULTS). Keep the un-prefixed keys too so an
+          // older bundled card still works; the new card ignores the extras.
+          if (e.haeo_battery_charge || e.haeo_battery_discharge) { const v = e.haeo_battery_charge || e.haeo_battery_discharge; haeoConfig.entity_haeo_battery = v; haeoConfig.entity_battery = v; }
+          if (e.haeo_grid_power) { haeoConfig.entity_haeo_grid = e.haeo_grid_power; haeoConfig.entity_grid = e.haeo_grid_power; }
+          if (e.haeo_load_power) { haeoConfig.entity_haeo_load = e.haeo_load_power; haeoConfig.entity_load = e.haeo_load_power; }
+          if (e.haeo_solar_power) { haeoConfig.entity_haeo_solar = e.haeo_solar_power; haeoConfig.entity_solar = e.haeo_solar_power; }
+          if (e.haeo_battery_soc) { haeoConfig.entity_haeo_soc = e.haeo_battery_soc; haeoConfig.entity_soc = e.haeo_battery_soc; }
+          if (e.haeo_import_price) { haeoConfig.entity_haeo_buy_price = e.haeo_import_price; haeoConfig.entity_buy_price = e.haeo_import_price; }
+          if (e.haeo_export_price) { haeoConfig.entity_haeo_sell_price = e.haeo_export_price; haeoConfig.entity_sell_price = e.haeo_export_price; }
+          // PAST tab — the card reads these from the recorder (history/history_during_period),
+          // so the user's live inverter sensors (Genergy entity settings) work directly. Only
+          // set when configured; unset keys fall back to the card's Sigenergy Modbus defaults.
+          // Sign conventions the card expects: battery +ve=charge, grid +ve=import — matches
+          // Sigenergy/`battery_positive_charging:true`; inverters that report the opposite
+          // (Deye/Goodwe, battery_positive_charging:false) will show an inverted Past battery.
+          if (e.battery_power) haeoConfig.entity_past_battery_power = e.battery_power;
+          if (e.load_power) haeoConfig.entity_past_load_power = e.load_power;
+          if (e.solar_power) haeoConfig.entity_past_solar_power = e.solar_power;
+          if (e.grid_power || e.grid_active_power) haeoConfig.entity_past_grid_power = e.grid_power || e.grid_active_power;
+          // Battery energy: card wants DAILY-reset sensors — the dashboard's *_today match.
+          if (e.battery_charge_today) haeoConfig.entity_past_battery_charge_energy = e.battery_charge_today;
+          if (e.battery_discharge_today) haeoConfig.entity_past_battery_discharge_energy = e.battery_discharge_today;
+          // NOT mapped (intentional): load/solar/grid PAST energy — the card expects LIFETIME
+          // (total_increasing) totals but the dashboard only exposes daily; leave to the card's
+          // defaults (correct for Sigenergy) rather than feed a daily sensor into a lifetime slot.
+          // Also not mapped: EV rows (card slot is a forecast; dashboard only has live EV) and
+          // grid/battery limits (no dashboard setting) — follow-ups if HAEO users need them.
           haeoConfig.currency_symbol = cfg.pricing?.currency || '$';
           innerCard = haeoConfig;
         } else if (emsP === 'emhass') {
@@ -6950,6 +7031,27 @@ return forecast.map(function(d) {
           if (e.buy_price || e.current_import_price) emhassConfig.buy_price = e.buy_price || e.current_import_price;
           if (e.sell_price || e.current_export_price) emhassConfig.sell_price = e.sell_price || e.current_export_price;
           if (e.mpc_cost_fun) emhassConfig.net_cost = e.mpc_cost_fun;
+          // PAST EVENTS (BESS) tab — the card reads these from the recorder
+          // (history/history_during_period), so the user's live inverter sensors work directly.
+          // Source them from the Genergy Core-Power settings so the Past tab is universal instead
+          // of falling back to the card's Sigenergy-only defaults (sensor.sigen_plant_*), which
+          // are absent on Deye/SolaX/Goodwe/etc. → an empty "No BESS sensor data" Past tab.
+          // Only set when configured (blank → card default, so Sigenergy users are unaffected).
+          // Sign note: the card expects battery +ve=charge / grid +ve=import; inverters that
+          // report the opposite (Deye/Goodwe, battery_positive_charging:false) show an inverted
+          // Past battery — a card limitation (no per-entity sign flip), documented for follow-up.
+          if (e.battery_power) emhassConfig.bess_batt_power = e.battery_power;
+          if (e.load_power) emhassConfig.bess_load_power = e.load_power;
+          if (e.solar_power) emhassConfig.bess_pv_power = e.solar_power;
+          if (e.grid_power || e.grid_active_power) emhassConfig.bess_grid_power = e.grid_power || e.grid_active_power;
+          if (e.battery_soc) emhassConfig.bess_soc = e.battery_soc;
+          // PAST prices (Past Events tab) — these are separate from the Future/forecast prices
+          // (buy_price/sell_price above). The card defaults them to Amber-Electric sensors
+          // (sensor.amber_express_home_*), so non-Amber users get €0.0000 in the Past tab. Source
+          // them from the live import/export price sensors — the card reads their recorder history,
+          // which IS the actual past price. Guarded so blank → card default.
+          if (e.current_import_price || e.buy_price) emhassConfig.past_buy_price = e.current_import_price || e.buy_price;
+          if (e.current_export_price || e.sell_price) emhassConfig.past_sell_price = e.current_export_price || e.sell_price;
           emhassConfig.currency_symbol = cfg.pricing?.currency || '$';
           innerCard = emhassConfig;
         } else if (emsP === 'energy_manager') {
@@ -10668,8 +10770,12 @@ class SigForecastModal extends HTMLElement {
           -webkit-overflow-scrolling: touch;
         }
         .modal-body > * {
+          /* Blend the wrapped event card's OUTER surface into the modal via --ha-card-background
+             (ha-card checks it before --card-background-color). Do NOT override
+             --card-background-color: CSS custom properties inherit through the shadow boundary,
+             and the event card's own settings/legend modals + dropdowns use it — nuking it to
+             transparent made those overlays render with no background (the reported bug). */
           --ha-card-background: transparent !important;
-          --card-background-color: transparent !important;
         }
 
         @media (max-width: 768px) {
@@ -10872,7 +10978,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c GENERGY-DASHBOARD %c v2.23.1 ',
+  '%c GENERGY-DASHBOARD %c v2.25.0 ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
@@ -11019,6 +11125,103 @@ console.info(
     injectResponsiveCSS();
   });
   observer.observe(document.body, { childList: true, subtree: true });
+})();
+
+// ═══════════════════════════════════════════════════════════
+// Shared sunrise/sunset annotation builder for the forecast chart.
+// Used by BOTH _buildDashboard and the self-refresh updater below so they emit an
+// identical annotation set. sun.sun's next_rising/next_setting are always in the
+// future; when the next event is tomorrow (UTC date differs) today's was 24h earlier.
+// Offsets span yesterday..day-after-tomorrow so the 48h window is covered at any hour.
+// ═══════════════════════════════════════════════════════════
+window.genergyBuildSunAnnotations = function (sunEntity, enabled) {
+  const anns = [];
+  if (!enabled || !sunEntity || !sunEntity.attributes ||
+      !sunEntity.attributes.next_rising || !sunEntity.attributes.next_setting) return anns;
+  const nextRise = new Date(sunEntity.attributes.next_rising);
+  const nextSet = new Date(sunEntity.attributes.next_setting);
+  const todayUtc = new Date().toISOString().slice(0, 10);
+  const todayRise = nextRise.toISOString().slice(0, 10) === todayUtc
+    ? nextRise : new Date(nextRise.getTime() - 86400000);
+  const todaySet = nextSet.toISOString().slice(0, 10) === todayUtc
+    ? nextSet : new Date(nextSet.getTime() - 86400000);
+  const fmt = (d) => d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const sunAnno = (ts, text, clr) => ({
+    x: ts, borderColor: clr, strokeDashArray: 4,
+    label: { text, borderColor: clr, orientation: 'horizontal', position: 'top',
+      style: { color: '#fff', background: clr, fontSize: '9px', padding: { left: 3, right: 3, top: 1, bottom: 1 } } }
+  });
+  for (const offset of [-86400000, 0, 86400000, 172800000]) {
+    const r = new Date(todayRise.getTime() + offset);
+    const s = new Date(todaySet.getTime() + offset);
+    anns.push(sunAnno(r.getTime(), '☀ ' + fmt(r), offset === 0 ? 'rgba(255,165,0,0.6)' : 'rgba(255,165,0,0.35)'));
+    anns.push(sunAnno(s.getTime(), '🌙 ' + fmt(s), offset === 0 ? 'rgba(100,80,180,0.6)' : 'rgba(100,80,180,0.35)'));
+  }
+  return anns;
+};
+
+// ═══════════════════════════════════════════════════════════
+// Sunrise/sunset annotation self-refresh.
+// The sun lines are baked into the forecast apexcharts-card's config, which is saved
+// into the lovelace config at _buildDashboard time. A fresh page load renders that
+// SAVED config WITHOUT recomputing, so after midnight the lines go a day stale and
+// "tomorrow" drops off the top. This recomputes from the live sun.sun and patches the
+// card in place — durably: it ALSO seeds the card's stored _config so the card's own
+// ~5-min data refresh re-applies the fresh set (updateOptions alone is clobbered by it).
+// ═══════════════════════════════════════════════════════════
+(function _sigSunAnnotationRefresh() {
+  function findDeep(root, tag) {
+    var found = [];
+    if (root.querySelectorAll) {
+      found = Array.prototype.slice.call(root.querySelectorAll(tag));
+      Array.prototype.slice.call(root.querySelectorAll('*')).forEach(function (el) {
+        if (el.shadowRoot) found = found.concat(findDeep(el.shadowRoot, tag));
+      });
+    }
+    return found;
+  }
+  function isSunLabel(a) {
+    var t = (a && a.label && a.label.text) || '';
+    return t.indexOf('☀') >= 0 || t.indexOf('🌙') >= 0;
+  }
+  function hasSun(arr) { return (arr || []).some(isSunLabel); }
+
+  function refresh() {
+    try {
+      var store = window.SigenergyConfig;
+      var hass = store && store._hass;
+      if (!hass || !hass.states) return;
+      var cfg = (store.get && store.get()) || {};
+      if (!(cfg.features && cfg.features.sunrise_sunset)) return;   // feature off → nothing baked
+      var fresh = window.genergyBuildSunAnnotations(hass.states['sun.sun'], true);
+      if (!fresh.length) return;
+      var todayKey = new Date().toISOString().slice(0, 10);
+      findDeep(document, 'apexcharts-card').forEach(function (el) {
+        var ch = el._apexChart, c = el._config;
+        if (!ch || !ch.w || !c || !c.apex_config) return;
+        var liveX = (ch.w.config.annotations && ch.w.config.annotations.xaxis) || [];
+        var cfgX = (c.apex_config.annotations && c.apex_config.annotations.xaxis) || [];
+        if (!hasSun(liveX) && !hasSun(cfgX)) return;                // not the forecast card
+        if (el.__genergySunDay === todayKey) return;                // already fresh today (idempotent)
+        // durability: seed the card's stored config so its own refresh re-applies fresh
+        c.apex_config.annotations = c.apex_config.annotations || {};
+        c.apex_config.annotations.xaxis = fresh.slice();
+        // immediate: patch the live chart, preserving non-sun annotations (e.g. the Now line)
+        var kept = liveX.filter(function (a) { return !isSunLabel(a); });
+        try { ch.updateOptions({ annotations: { xaxis: kept.concat(fresh) } }, false, false); }
+        catch (e) { return; }
+        el.__genergySunDay = todayKey;
+      });
+    } catch (e) { /* never let this break the dashboard */ }
+  }
+  window._genergyRefreshSunAnnotations = refresh;
+
+  // Retry frequently while the card mounts, then settle to a periodic tick that
+  // catches the midnight rollover (kiosks stay open) and SPA re-navigation.
+  var fast = setInterval(refresh, 2000);
+  setTimeout(function () { clearInterval(fast); }, 30000);
+  setInterval(refresh, 60000);
+  refresh();
 })();
 
 // ═══════════════════════════════════════════════════════════

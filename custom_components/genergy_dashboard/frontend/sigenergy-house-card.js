@@ -53,6 +53,7 @@ const DEFAULT_CONFIG = {
     ev_vehicle: false,
     ev_vehicle_auto: false,
     ev_vehicle_power_threshold: 100,
+    two_ev_garage: false,
     heat_pump: false,
     grid: true,
     hide_cables: false,
@@ -60,6 +61,8 @@ const DEFAULT_CONFIG = {
     interactive_house: true,
   },
   entities: {
+    ev2_charger_power: "",
+    ev2_charger_state: "",
     solar_power: "sensor.deyeinvertermaster_pv_power",
     load_power: "sensor.deyeinvertermaster_load_power",
     battery_power: "sensor.deyeinvertermaster_battery_output_power",
@@ -135,6 +138,10 @@ const PATHS = {
   grid:       "M 600 645 L 740 695 L 790 695 L 855 680 L 855 830",
   // EV/AC charger: charger wall → across garage → around car → to SigenStor
   ev:         "M 75 485 L 75 455 L 290 535 L 350 560 L 295 585 L 475 600",
+  // EV 2 (two-garage scene only): default routed from the 2nd garage bay (~+170px right
+  // of bay 1, measured from home_has_solar_has_2car.png) to the junction. Editable via the
+  // cable editor like every other path — this is just a sensible starting point.
+  ev2:        "M 250 490 L 250 455 L 420 550 L 490 605",
   // Solar animation: same as solar path
   solar_anim: "M 475 85 L 335 270 L 505 320 L 505 560",
   // Heat pump: from SigenStor area along bottom wall to right side
@@ -148,6 +155,7 @@ const LABELS = {
   battery: { top: "72%", left: "28%",  entity: "battery_soc",      label: "BATTERY", color: "battery_discharge" },
   grid:    { top: "65%", left: "72%",  entity: "grid_import",      label: "GRID",      color: "grid_import" },
   ev:      { top: "54%", left: "1%",   entity: "ev_charger_power",   label: "EV",          color: "ev" },
+  ev2:     { top: "64%", left: "18%",  entity: "ev2_charger_power",  label: "EV",          color: "ev" },
   ac:      { top: "33%", left: "1%",   entity: "ev_charger_power",   label: "AC CHARGER",   color: "ev" },
   heatpump:{ top: "43%", left: "78%",  entity: "heat_pump_power",    label: "HEAT PUMP",    color: "heat_pump" },
 };
@@ -207,6 +215,8 @@ class SigenergyHouseCard extends LitElement {
     const SKIP = new Set(['solar_anim']); // derived paths
     for (const [name, defaultD] of Object.entries(PATHS)) {
       if (SKIP.has(name)) continue;
+      // EV 2 path only exists in two-garage mode — keep it out of the editor otherwise.
+      if (name === 'ev2' && !this._twoEvGarage) continue;
       const d = configPaths[name] || defaultD;
       this._editPaths[name] = this._parsePath(d);
     }
@@ -441,8 +451,9 @@ class SigenergyHouseCard extends LitElement {
     return this._stateStr(this._config.entities.ev_charger_state).toLowerCase().trim()
       .replace(/[\s-]+/g, '_');
   }
-  get _isEvConnectedByState() {
-    const state = this._evConnectionState;
+  // Pure state→connected classifier, shared by EV 1 and EV 2 so their logic never
+  // diverges. `state` must already be lower-cased / underscore-normalised.
+  _connectedByState(state) {
     const compactState = state.replace(/_/g, '');
     const disconnectedStates = new Set([
       '', '0', 'false', 'off', 'idle', 'available', 'unknown', 'unavailable',
@@ -456,6 +467,28 @@ class SigenergyHouseCard extends LitElement {
     if (['1', 'true', 'on'].includes(state)) return true;
     return /(connected|plugged|plugged_in|charging|charge_complete|ready|ready_to_charge|waiting|awaiting|preparing|paused|suspended|complete|completed|finished|finishing|stopped|no_power)/.test(state) ||
       /(pluggedin|chargecomplete|readytocharge|nopower)/.test(compactState);
+  }
+  get _isEvConnectedByState() { return this._connectedByState(this._evConnectionState); }
+
+  // ── EV 2 (only used when features.two_ev_garage is on) ──────────────────────
+  get _twoEvGarage() { return !!(this._config.features && this._config.features.two_ev_garage); }
+  get _ev2Power() { return this._toWatts(this._config.entities.ev2_charger_power); }
+  get _isEv2ConsumingAboveThreshold() {
+    const threshold = parseFloat(this._config.features.ev_vehicle_power_threshold);
+    return this._ev2Power > (Number.isFinite(threshold) ? threshold : 100);
+  }
+  get _ev2ConnectionState() {
+    return this._stateStr(this._config.entities.ev2_charger_state).toLowerCase().trim()
+      .replace(/[\s-]+/g, '_');
+  }
+  get _isEv2ConnectedByState() { return this._connectedByState(this._ev2ConnectionState); }
+  get _isEv2AutoActive() { return this._isEv2ConsumingAboveThreshold || this._isEv2ConnectedByState; }
+  // Whether EV 2's car/gate should show. Auto mode → EV 2's own power/state; manual
+  // mode → mirrors the single "Always Show EV Vehicle" toggle (both cars appear).
+  get _showEv2Vehicle() {
+    if (!this._twoEvGarage) return false;
+    if (!this._config.features.ev_vehicle_auto) return !!this._config.features.ev_vehicle;
+    return this._isEv2AutoActive;
   }
   get _heatPumpPower() { return this._toWatts(this._config.entities.heat_pump_power); }
   get _isHeatPumpActive() { return this._heatPumpPower > 5; }
@@ -567,6 +600,22 @@ class SigenergyHouseCard extends LitElement {
   // ── Image URLs ───────────────────────────────────────────────────────────
   get _baseImage() {
     const base = this._config.image_path;
+    // Two-garage mode: pick the composite scene by which car(s) are shown.
+    // Two-garage mode: ALWAYS stay in the two-car garage scene and vary which bay holds a
+    // car by which EV is connected. This keeps the garage layout fixed, so the AC chargers
+    // and EV/EV2 cables (positioned for the two-bay garage) stay aligned in every state —
+    // rather than snapping back to the single-car scene when one EV disconnects.
+    //   EV1 = left bay, EV2 = right bay.
+    //   both → home_has_solar_has_2car.png   |  EV1 only → …_has_2carL.png (left car)
+    //   EV2 only → …_has_2carR.png (right car)  |  none → …_no_2car.png (empty two-car garage)
+    // (Day-only for now; night variants are a documented future addition.)
+    if (this._twoEvGarage) {
+      const s1 = this._showEvVehicle, s2 = this._showEv2Vehicle;
+      if (s1 && s2) return `${base}/home_has_solar_has_2car.png`;
+      if (s1) return `${base}/home_has_solar_has_2carL.png`;
+      if (s2) return `${base}/home_has_solar_has_2carR.png`;
+      return `${base}/home_has_solar_no_2car.png`;
+    }
     if (this._showEvVehicle) {
       return this._isNight ? `${base}/dark_home_has_solar_has_car.png` : `${base}/home_has_solar_has_car.png`;
     }
@@ -593,6 +642,10 @@ class SigenergyHouseCard extends LitElement {
     }
     if (this._showEvCharger) {
       pathNames.push('ev');
+    }
+    // EV 2 cable — two-garage scene only, and only when EV 2 is present.
+    if (this._twoEvGarage && this._showEv2Vehicle) {
+      pathNames.push('ev2');
     }
     if (this._config.features.heat_pump) {
       pathNames.push('heat_pump');
@@ -665,6 +718,7 @@ class SigenergyHouseCard extends LitElement {
           this._isImporting || this._isExporting,
           this._isImporting, 2.5) : ""}
       ${this._showEvCharger ? this._renderComet(this._getEditPath('ev'), c.ev, this._isEvCharging, true, 2.5) : ""}
+      ${this._twoEvGarage && this._showEv2Vehicle ? this._renderComet(this._getEditPath('ev2'), c.ev, this._ev2Power > 5, true, 2.5) : ""}
       ${this._config.features.heat_pump ? this._renderComet(this._getEditPath('heat_pump'), c.heat_pump, this._isHeatPumpActive, false, 2.5) : ""}
     `;
   }
@@ -713,6 +767,13 @@ class SigenergyHouseCard extends LitElement {
   // ── Path Editor: interactive drag-to-position cable points ────────────────
   get _isEditMode() {
     return this._config.edit_paths === true;
+  }
+
+  // True while ANY on-card editor is active (cables/zones/labels/assets). Used to
+  // suppress the interactive-house modal + zone hit-testing so edit clicks/drags
+  // aren't hijacked into opening element modals.
+  get _isAnyEditMode() {
+    return this._isEditMode || this._isZoneEditMode || this._isLabelEditMode || this._isAssetEditMode;
   }
 
   _renderEditor() {
@@ -1079,10 +1140,12 @@ class SigenergyHouseCard extends LitElement {
             stroke="${this._isZoneEditMode ? z.color : 'none'}"
             stroke-width="${this._isZoneEditMode ? '3' : '0'}"
             stroke-dasharray="${this._isZoneEditMode ? '10 8' : '0'}"
-            style="cursor: ${this._isZoneEditMode ? 'move' : 'pointer'}; pointer-events: all;"
+            style="cursor: ${this._isZoneEditMode ? 'move' : 'pointer'}; pointer-events: ${(this._isZoneEditMode || !this._isAnyEditMode) ? 'all' : 'none'};"
             @pointerdown="${(e) => this._isZoneEditMode && this._onZoneDragStart(e, z.key, 'move')}"
             @click="${(e) => {
-              if (this._isZoneEditMode) return;
+              // In cable / label / asset editing, house clicks belong to that editor —
+              // never open an element modal. (Zone-edit uses pointerdown drag, not click.)
+              if (this._isAnyEditMode) return;
               e.stopPropagation();
               const def = this._defaultClickZones()[z.key] || {};
               this.dispatchEvent(new CustomEvent('genergy-modal', {
@@ -1259,6 +1322,51 @@ class SigenergyHouseCard extends LitElement {
     window.addEventListener('pointerup', onUp);
   }
 
+  // ── AC charger positioning (two-garage scene: one charger per bay) ─────────
+  // ac_charger_bg.png is a full-canvas overlay with the charger baked at bay 1.
+  // We render it twice and nudge each via a translate; positions are drag-editable
+  // in the Asset editor and persist like heat_pump_position.
+  _getChargerStyle(pos, def) {
+    const p = pos || def || {};
+    const tx = p.tx ?? (def && def.tx) ?? '0%';
+    const ty = p.ty ?? (def && def.ty) ?? '0%';
+    const sc = p.scale ?? 1;
+    return `transform: translate(${tx}, ${ty}) scale(${sc}); transform-origin: center;`;
+  }
+
+  // Drag handle position = the charger's baked centroid in ac_charger_bg.png (~6.9%, 52%)
+  // plus the applied translate, so the handle sits on the visible charger and follows it.
+  _getChargerHandleStyle(pos, defTx = 0) {
+    const tx = parseFloat((pos && pos.tx) ?? defTx) || 0;
+    const ty = parseFloat((pos && pos.ty) ?? 0) || 0;
+    return `left:${(6.9 + tx).toFixed(1)}%;top:${(52 + ty).toFixed(1)}%;`;
+  }
+
+  _onChargerDragStart(e, idx) {
+    if (!this._isAssetEditMode) return;
+    e.preventDefault(); e.stopPropagation();
+    const container = this.shadowRoot.querySelector('.house-container');
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const key = idx === 2 ? 'ev2_charger_position' : 'ev_charger_position';
+    const cur = this._config[key] || (idx === 2 ? { tx: '14.5%' } : {});
+    const startTx = parseFloat(cur.tx ?? (idx === 2 ? 14.5 : 0));
+    const startTy = parseFloat(cur.ty ?? 0);
+    const startX = e.clientX, startY = e.clientY;
+    const onMove = (ev) => {
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      this._config = { ...this._config, [key]: {
+        ...(this._config[key] || {}),
+        tx: (startTx + dx / rect.width * 100).toFixed(1) + '%',
+        ty: (startTy + dy / rect.height * 100).toFixed(1) + '%',
+      }};
+      this.requestUpdate();
+    };
+    const onUp = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }
+
   _onHpSlider(prop, value, unit) {
     const strVal = unit ? value + unit : parseFloat(value);
     this._config = { ...this._config, heat_pump_position: {
@@ -1271,7 +1379,12 @@ class SigenergyHouseCard extends LitElement {
   _onApplyAssets() {
     this.dispatchEvent(new CustomEvent('genergy-asset-position-save', {
       bubbles: true, composed: true,
-      detail: { heat_pump_position: this._config.heat_pump_position || {}, hass: this.hass },
+      detail: {
+        heat_pump_position: this._config.heat_pump_position || {},
+        ev_charger_position: this._config.ev_charger_position || {},
+        ev2_charger_position: this._config.ev2_charger_position || {},
+        hass: this.hass,
+      },
     }));
     const btn = this.shadowRoot.querySelector('.apply-asset-btn');
     if (btn) { btn.textContent = '✓ Saved!'; setTimeout(() => { btn.textContent = '✓ Save Position'; }, 1500); }
@@ -1289,8 +1402,13 @@ class SigenergyHouseCard extends LitElement {
   _renderLabel(key) {
     const def = LABELS[key];
     if (!def) return "";
+    // User can hide the on-house EV labels (info still available in the EV Chargers panel).
+    if ((key === "ev" || key === "ev2") && this._config.features?.ev_show_labels === false) return "";
     if (key === "ev" && !this._showEvVehicle) return "";
-    if (key === "ac" && !this._showEvCharger) return "";
+    if (key === "ev2" && (!this._twoEvGarage || !this._showEv2Vehicle)) return "";
+    // AC-charger label is folded into the EV label when a vehicle is shown (see "ev" case);
+    // only surface it standalone when the charger is present but no car.
+    if (key === "ac" && (!this._showEvCharger || this._showEvVehicle)) return "";
     if (key === "heatpump" && !this._config.features.heat_pump) return "";
 
     let primary = "";
@@ -1351,16 +1469,32 @@ class SigenergyHouseCard extends LitElement {
         break;
       }
       case "ev": {
+        // Consolidated single label: "EV 1 · 3.2 kW · 62%" (name · power · SoC). In two-garage
+        // mode the name is "EV 1"; otherwise the configured charger label or "EV". The separate
+        // AC-charger label is suppressed above so power isn't shown twice.
         const evSocVal = this._config.entities.ev_soc ? this._stateNum(this._config.entities.ev_soc) : null;
         const evRangeVal = this._config.entities.ev_range ? this._stateNum(this._config.entities.ev_range) : null;
-        if (evSocVal != null && !Number.isNaN(evSocVal)) {
-          primary = `${Math.round(evSocVal)}%`;
-        } else {
-          primary = this._formatPower(this._evPower, this._config.entities.ev_charger_power);
-        }
+        const evName = this._twoEvGarage ? 'EV 1' : (this._config.ev_charger_label || 'EV');
+        const evPwr = this._formatPower(this._evPower, this._config.entities.ev_charger_power);
+        const socPart = (evSocVal != null && !Number.isNaN(evSocVal)) ? ` · ${Math.round(evSocVal)}%` : '';
+        primary = `${evName} · ${evPwr}${socPart}`;
+        secondary = "";
         if (evRangeVal != null && !Number.isNaN(evRangeVal)) runtimeLine = `${Math.round(evRangeVal)} km`;
         if (this._isEvCharging) statusLine = "Charging";
         else if (this._isEvConnectedByState) statusLine = "Connected";
+        break;
+      }
+      case "ev2": {
+        const ev2Soc = this._config.entities.ev2_soc ? this._stateNum(this._config.entities.ev2_soc) : null;
+        const ev2Range = this._config.entities.ev2_range ? this._stateNum(this._config.entities.ev2_range) : null;
+        const ev2Name = this._config.ev2_charger_label || 'EV 2';
+        const ev2Pwr = this._formatPower(this._ev2Power, this._config.entities.ev2_charger_power);
+        const socPart = (ev2Soc != null && !Number.isNaN(ev2Soc)) ? ` · ${Math.round(ev2Soc)}%` : '';
+        primary = `${ev2Name} · ${ev2Pwr}${socPart}`;
+        secondary = "";
+        if (ev2Range != null && !Number.isNaN(ev2Range)) runtimeLine = `${Math.round(ev2Range)} km`;
+        if (this._ev2Power > 5) statusLine = "Charging";
+        else if (this._isEv2ConnectedByState) statusLine = "Connected";
         break;
       }
       case "ac":
@@ -1374,7 +1508,7 @@ class SigenergyHouseCard extends LitElement {
     }
 
     const labelPos = this._config.label_positions?.[key] || def;
-    const _isInteractive = this._config.features?.interactive_house && !this._isLabelEditMode;
+    const _isInteractive = this._config.features?.interactive_house && !this._isAnyEditMode;
     const _clickHandler = _isInteractive ? (e) => {
       e.stopPropagation();
       this.dispatchEvent(new CustomEvent('genergy-modal', {
@@ -1436,7 +1570,23 @@ class SigenergyHouseCard extends LitElement {
           <img class="layer-img" src="${this._baseImage}" />
           <img class="layer-img" src="${this._sigenstorImage}" />
           <img class="layer-img" src="${this._ammeterImage}" />
-          ${this._showEvCharger ? html`<img class="layer-img" src="${this._acChargerImage}" />` : ''}
+          ${this._showEvCharger && !this._twoEvGarage ? html`<img class="layer-img" src="${this._acChargerImage}" />` : ''}
+          ${this._twoEvGarage && this._showEvCharger ? html`<img
+            class="layer-img charger-img" src="${this._acChargerImage}"
+            style="${this._getChargerStyle(this._config.ev_charger_position)}"
+            @error="${(e) => e.target.style.display = 'none'}" />` : ''}
+          ${this._twoEvGarage && this._showEv2Vehicle ? html`<img
+            class="layer-img charger-img" src="${this._acChargerImage}"
+            style="${this._getChargerStyle(this._config.ev2_charger_position, { tx: '14.5%' })}"
+            @error="${(e) => e.target.style.display = 'none'}" />` : ''}
+          ${this._isAssetEditMode && this._twoEvGarage && this._showEvCharger ? html`<div
+            class="charger-handle" title="Drag EV 1 charger"
+            style="${this._getChargerHandleStyle(this._config.ev_charger_position, 0)}"
+            @pointerdown="${(e) => this._onChargerDragStart(e, 1)}">🔌</div>` : ''}
+          ${this._isAssetEditMode && this._twoEvGarage && this._showEv2Vehicle ? html`<div
+            class="charger-handle" title="Drag EV 2 charger"
+            style="${this._getChargerHandleStyle(this._config.ev2_charger_position, 14.5)}"
+            @pointerdown="${(e) => this._onChargerDragStart(e, 2)}">🔌</div>` : ''}
           ${this._config.features.heat_pump && (this._config.hp_image_style || 'outdoor') !== 'hidden' ? html`<img
             class="heat-pump-img${this._isAssetEditMode ? ' asset-editing' : ''}"
             src="${this._heatPumpImage}"
@@ -1470,6 +1620,7 @@ class SigenergyHouseCard extends LitElement {
           ${this._renderLabel("battery")}
           ${this._renderLabel("grid")}
           ${this._renderLabel("ev")}
+          ${this._renderLabel("ev2")}
           ${this._renderLabel("ac")}
           ${this._renderLabel("heatpump")}
           ${this._renderWeather()}
@@ -1626,6 +1777,28 @@ class SigenergyHouseCard extends LitElement {
         outline: 2px dashed #e67e22;
         outline-offset: 3px;
       }
+
+      .charger-handle {
+        position: absolute;
+        transform: translate(-50%, -50%);
+        width: 26px;
+        height: 26px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(230, 126, 34, 0.92);
+        border: 2px solid #fff;
+        border-radius: 50%;
+        cursor: grab;
+        pointer-events: auto;
+        z-index: 12;
+        font-size: 13px;
+        line-height: 1;
+        user-select: none;
+        touch-action: none;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+      }
+      .charger-handle:active { cursor: grabbing; }
 
       .flow-svg {
         position: absolute;

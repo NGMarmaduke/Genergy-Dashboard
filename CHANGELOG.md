@@ -2,6 +2,31 @@
 
 All notable changes to the Genergy Dashboard are documented here.
 
+## [2.25.0] - 2026-07-12
+
+A second EV / two-car garage for the house card, latest EMS event cards, and a round of Forecasts fixes so the **"X Forecasts"** modal works across every supported EMS (EMHASS, HAEO, Energy Manager).
+
+### Added
+- **Two-EV / two-car garage house scene** (thanks @Timieh for the artwork, PR #29) — When **Number of EV Chargers = 2** (Settings → Features), the house card switches to a two-bay garage that tracks each EV independently: both bays open with cars when both are connected, only the left/right bay open when just EV 1 / EV 2 is connected, and both closed when neither is — so the layout (and its cables/chargers) stays fixed and aligned in every state. Enable via **Two-Garage House Scene**.
+- **Second AC charger + EV 2 flow line** — In two-garage mode a charger is drawn on each bay (drag to reposition via the **Asset Position Editor** 🔌 handles), and EV 2 gets its own animated flow cable (route it via the **Cable Path Editor**).
+- **EV Chargers panel + EV labels are now toggleable** — New **Show EV Chargers Panel** and **Show EV Labels on House** switches let you choose where per-EV info appears (the stat cards below the house, the labels on the scene, or both).
+
+### Changed
+- **Event cards updated to latest** (via PR #39, thanks @Roving-Ronin) — Energy Manager Event Card **v2.8.28**, HAEO Events Card **v3.2.69**, EMHASS Events Card **v2.6.7**.
+- **EV labels consolidated** — One compact label per EV (e.g. `EV 1 · 3.2 kW · 62%`) instead of two stacked labels.
+
+### Fixed
+- **EV status no longer shows "Charging" at 0 W** — the EV panel now derives Charging/Connected from power (above/below the charging threshold) rather than the raw charger-state string.
+- **EV charger-panel icon threshold** — the panel icon now turns green at the same charging threshold that shows the car on the house card (was a separate hardcoded value).
+- **Cable/label/asset editors no longer open detail modals** — while editing on the house card, clicks route to the editor instead of popping element modals.
+
+### Fixed
+- **Forecasts "Past Events" tab now works on non-Sigenergy inverters** — The EMHASS/HAEO event cards' Past-Events (BESS) tab defaulted to `sensor.sigen_plant_*`, which don't exist on Deye/SolaX/Goodwe/etc., so the tab showed *"No BESS sensor data for this period."* The dashboard now sources the Past tab's battery/load/solar/grid power from your **Genergy Core-Power settings** (and the HAEO **Future** tab from your HAEO addon entities), so the Forecasts card is driven by the entities you already configured — no separate setup. The Past tab's **actual prices** are now sourced from your live import/export price sensors too (EMHASS `past_buy_price`/`past_sell_price` defaulted to Amber-Electric sensors → €0.0000 for non-Amber users). Verified live on a Deye system: the Past tab went from empty to a full recorded timeline with real prices. *Notes:* the Past **energy** columns still use card defaults (the card wants lifetime totals; the dashboard exposes daily), and the card has no per-entity sign flip, so on inverters where positive = discharge (Deye/Goodwe) the Past **battery** column reads inverted — a card-side follow-up. Both old and new HAEO key names are sent for backward-compatibility.
+- **HAEO Forecasts entity-API change** — HAEO Events Card v3 renamed its config keys (`entity_haeo_*`/`entity_past_*`, was `entity_*`); the dashboard now sends the new keys so HAEO reads your configured entities instead of the card's built-in defaults. EMHASS and Energy Manager wiring verified against the new cards too.
+- **Transparent settings/legend modal in the Forecasts card** — Opening a forecast event card's settings (or legend) modal showed no background. The forecast modal wrapper was forcing `--card-background-color: transparent` on the whole card, and that variable inherits through the shadow DOM into the card's own overlays; it now only makes the card's outer surface transparent (`--ha-card-background`), so the settings modal is opaque again.
+- **Forecast chart modal blank space** — Closing the expanded forecast chart no longer leaves a large empty gap below it (the chart wrapper's expand height is now cleared after the chart relayouts).
+- **Missing "tomorrow" on the forecast chart's sunrise/sunset lines** — The sun-time annotations are baked into the saved dashboard config and were never recomputed on a fresh load, so after midnight they went a day stale and tomorrow's sunrise dropped off. They now self-refresh from `sun.sun` on load and across the day.
+
 ## [2.23.1] - 2026-07-09
 
 Follow-up release with an optional battery-stack dashboard layout, battery detail-panel improvements, EV-card polish, and a round of fixes on top of `2.23.0`.
