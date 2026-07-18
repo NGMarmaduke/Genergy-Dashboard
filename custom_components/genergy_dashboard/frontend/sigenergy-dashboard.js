@@ -49,12 +49,14 @@ const DEFAULT_ENTITIES = {
   ev_charger_state: '',
   ev_soc: '',
   ev_range: '',
+  ev_time_to_full: '',   // optional: EV integration's "time to full charge" sensor
   // Second EV charger (shown when features.num_ev_chargers >= 2). EV 1 keeps
   // the unprefixed keys above for backward compatibility with existing configs.
   ev2_charger_power: '',
   ev2_charger_state: '',
   ev2_soc: '',
   ev2_range: '',
+  ev2_time_to_full: '',
   heat_pump_power: '',
   emhass_mode: '',
   emhass_reason: '',
@@ -913,6 +915,7 @@ const _GENERGY_MODAL_TYPES = {
   battery: { title: 'Battery', icon: 'mdi:battery-charging-60', color: '#2ecc71' },
   grid: { title: 'Grid', icon: 'mdi:transmission-tower', color: '#e74c3c' },
   ev: { title: 'EV / Charger', icon: 'mdi:car-electric', color: '#ff69b4' },
+  ev2: { title: 'EV 2 / Charger', icon: 'mdi:car-electric', color: '#ff69b4' },
   heatpump: { title: 'Heat Pump', icon: 'mdi:heat-pump', color: '#e67e22' },
   forecast: { title: 'Energy Forecast', icon: 'mdi:chart-timeline-variant', color: '#00d4b8' },
   smart_load: { title: 'Smart Load', icon: 'mdi:lightning-bolt', color: '#00d4b8' },
@@ -999,6 +1002,7 @@ function _genergyPrimaryLabel(type) {
     battery: 'Battery power / SoC',
     grid: 'Live grid flow',
     ev: 'Charging status',
+    ev2: 'Charging status',
     heatpump: 'Live heat-pump load',
     forecast: 'Forecast snapshot',
   })[type] || 'Live value';
@@ -1011,6 +1015,7 @@ function _genergyStatusLabel(type) {
     battery: 'Charge state',
     grid: 'Grid direction',
     ev: 'Connection state',
+    ev2: 'Connection state',
     heatpump: 'Operating state',
   })[type] || 'Status';
 }
@@ -1074,8 +1079,19 @@ function _genergyElementRows(type, cfg) {
       { label: 'Charging power', entityId: e.ev_charger_power, unit: 'W' },
       { label: 'Charger state', entityId: e.ev_charger_state },
       { label: 'Vehicle SoC', entityId: e.ev_soc, unit: '%' },
+      { label: 'Time to full', entityId: e.ev_time_to_full },
       { label: 'Vehicle range', entityId: e.ev_range, unit: 'km' },
       { label: 'EV energy today', entityId: e.ev_energy_daily_meter, unit: 'kWh' },
+    ];
+  }
+  if (type === 'ev2') {
+    return [
+      { label: 'Charging power', entityId: e.ev2_charger_power, unit: 'W' },
+      { label: 'Charger state', entityId: e.ev2_charger_state },
+      { label: 'Vehicle SoC', entityId: e.ev2_soc, unit: '%' },
+      { label: 'Time to full', entityId: e.ev2_time_to_full },
+      { label: 'Vehicle range', entityId: e.ev2_range, unit: 'km' },
+      { label: 'EV energy today', entityId: e.ev2_energy_daily_meter, unit: 'kWh' },
     ];
   }
   if (type === 'heatpump') {
@@ -2814,6 +2830,8 @@ class SigenergySettingsCard extends HTMLElement {
         ${this._entityRow('EV SoC', 'ev_soc', e)}
         <div style="font-size:9px;color:#666;padding:0 0 4px 4px;">EV SoC shows on the house card EV node. The EV node must be visible — enable <b>Always Show EV Vehicle</b> in Features → EV if your car is not auto-detected.</div>
         ${this._entityRow('EV Range', 'ev_range', e)}
+        ${this._entityRow('Time to Full', 'ev_time_to_full', e)}
+        <div style="font-size:9px;color:#666;padding:0 0 4px 4px;">Optional — your EV integration's "time to full charge" sensor (e.g. Tesla, Easee, Zaptec, Wallbox). Shown in the EV detail modal when set.</div>
         <div style="margin-top:8px;border-top:1px solid rgba(155,89,182,0.2);padding-top:8px;">
           <div style="display:flex;align-items:center;justify-content:space-between;">
             <div>
@@ -2848,6 +2866,7 @@ class SigenergySettingsCard extends HTMLElement {
         ${this._entityRow('Charger State', 'ev2_charger_state', e)}
         ${this._entityRow('EV SoC', 'ev2_soc', e)}
         ${this._entityRow('EV Range', 'ev2_range', e)}
+        ${this._entityRow('Time to Full', 'ev2_time_to_full', e)}
         <div style="font-size:9px;color:#666;padding:0 0 4px 4px;">EV 2 shows in the <b>EV Chargers</b> panel (Power / SoC / Range / State), and — with the <b>Two-Garage House Scene</b> enabled (Features tab) — also gets its own bay, car and charger on the house card.</div>
       </div>
       ` : ''}
@@ -7871,6 +7890,61 @@ class SigenergyEnergyFlowCard extends HTMLElement {
     return { v: kwh.toFixed(2), u: 'kWh' };
   }
 
+  _computeFlowMatrix(sources, dests) {
+    const ce = this._config.conservation_entities;
+    const remaining = {};
+    dests.forEach(d => { remaining[d.entity_id] = this._getKwh(d.entity_id, d.add_entities); });
+
+    const flowMatrix = {};
+    const srcSeedUsed = {};
+
+    if (ce && ce.solar && ce.battery_charge && ce.grid_import) {
+      const solarSrc = sources.find(s => s.entity_id === ce.solar);
+      const gridSrc = sources.find(s => s.entity_id === ce.grid_import);
+      const batCKwh = remaining[ce.battery_charge] || 0;
+      if (solarSrc && gridSrc && batCKwh > 0.005) {
+        const gridKwh = this._getKwh(gridSrc.entity_id, gridSrc.add_entities);
+        const solarKwh = this._getKwh(solarSrc.entity_id, solarSrc.add_entities);
+        const gridToBat = Math.min(gridKwh, batCKwh);
+        const solarToBat = Math.min(Math.max(0, batCKwh - gridKwh), solarKwh);
+        if (gridToBat > 0.005) {
+          flowMatrix[ce.grid_import] = flowMatrix[ce.grid_import] || {};
+          flowMatrix[ce.grid_import][ce.battery_charge] = gridToBat;
+          remaining[ce.battery_charge] -= gridToBat;
+          srcSeedUsed[ce.grid_import] = (srcSeedUsed[ce.grid_import] || 0) + gridToBat;
+        }
+        if (solarToBat > 0.005) {
+          flowMatrix[ce.solar] = flowMatrix[ce.solar] || {};
+          flowMatrix[ce.solar][ce.battery_charge] = solarToBat;
+          remaining[ce.battery_charge] -= solarToBat;
+          srcSeedUsed[ce.solar] = (srcSeedUsed[ce.solar] || 0) + solarToBat;
+        }
+      }
+    }
+
+    sources.forEach(src => {
+      const srcTotal = this._getKwh(src.entity_id, src.add_entities);
+      const srcVal = srcTotal - (srcSeedUsed[src.entity_id] || 0);
+      let srcRem = srcVal;
+      if (!flowMatrix[src.entity_id]) flowMatrix[src.entity_id] = {};
+      const childSet = new Set((src.children || []).filter(eid => remaining[eid] !== undefined));
+      dests.forEach(d => { if ((d.parents || []).includes(src.entity_id)) childSet.add(d.entity_id); });
+      const children = [...childSet];
+      const totalDstRem = children.reduce((s, eid) => s + (remaining[eid] || 0), 0);
+      children.forEach(eid => {
+        if (totalDstRem > 0 && srcRem > 0) {
+          const share = (remaining[eid] || 0) / totalDstRem;
+          const flow = Math.min(share * srcVal, srcRem, remaining[eid] || 0);
+          flowMatrix[src.entity_id][eid] = (flowMatrix[src.entity_id][eid] || 0) + flow;
+          remaining[eid] = (remaining[eid] || 0) - flow;
+          srcRem -= flow;
+        }
+      });
+    });
+
+    return flowMatrix;
+  }
+
   _render() {
     if (!this.shadowRoot || !this._config.nodes) return;
     const nodes = this._config.nodes || [];
@@ -7917,59 +7991,15 @@ class SigenergyEnergyFlowCard extends HTMLElement {
     const srcBoxes = _allocateBoxes(sources, totalSrc, srcAvail);
     const dstBoxes = _allocateBoxes(dests, totalDst, dstAvail);
 
-    // ── Conservation seed flows ───────────────────────────────────────────────
-    // Instead of clamping mid-greedy (which strands energy on source nodes),
-    // pre-assign the battery-charge split as fixed seed flows BEFORE the greedy.
-    // Physical rule: grid covers battery charging first; solar covers the rest.
-    //   gridToBattery  = min(grid_import, battery_charge)
-    //   solarToBattery = max(0, battery_charge - grid_import)
-    // Seeds are pushed directly into flows[] and deducted from remaining[] and
-    // srcSeedUsed[] so the greedy only handles the energy not yet accounted for.
-    const _seedFlows = [];
-    const _srcSeedUsed = {};
-    const _ce = this._config.conservation_entities;
-    if (_ce && _ce.solar && _ce.battery_charge && _ce.grid_import) {
-      const _solarSrc = srcBoxes.find(n => n.entity_id === _ce.solar);
-      const _gridSrc  = srcBoxes.find(n => n.entity_id === _ce.grid_import);
-      const _batCDst  = dstBoxes.find(n => n.entity_id === _ce.battery_charge);
-      if (_solarSrc && _gridSrc && _batCDst && _batCDst.kwh > 0.005) {
-        const gridToBat  = Math.min(_gridSrc.kwh, _batCDst.kwh);
-        const solarToBat = Math.min(Math.max(0, _batCDst.kwh - _gridSrc.kwh), _solarSrc.kwh);
-        if (gridToBat > 0.005) {
-          _seedFlows.push({ src: _gridSrc, dst: _batCDst, kwh: gridToBat });
-          _srcSeedUsed[_gridSrc.entity_id] = (_srcSeedUsed[_gridSrc.entity_id] || 0) + gridToBat;
-        }
-        if (solarToBat > 0.005) {
-          _seedFlows.push({ src: _solarSrc, dst: _batCDst, kwh: solarToBat });
-          _srcSeedUsed[_solarSrc.entity_id] = (_srcSeedUsed[_solarSrc.entity_id] || 0) + solarToBat;
-        }
-      }
-    }
-
-    // Greedy flow allocation for energy not covered by seeds
-    const remaining = {};
-    dstBoxes.forEach(d => { remaining[d.entity_id] = d.kwh; });
-    _seedFlows.forEach(sf => { remaining[sf.dst.entity_id] -= sf.kwh; });
-    const flows = [..._seedFlows];
+    // ── Flow allocation (seed + greedy) via shared method ────────────────────
+    const _flowMatrix = this._computeFlowMatrix(sources, dests);
+    const flows = [];
     srcBoxes.forEach(src => {
-      let srcRem = src.kwh - (_srcSeedUsed[src.entity_id] || 0);
-      const childSet = new Set(src.children || []);
-      dstBoxes.forEach(d => { if ((d.parents || []).includes(src.entity_id)) childSet.add(d.entity_id); });
-      const children = [...childSet]
-        .map(eid => dstBoxes.find(d => d.entity_id === eid))
-        .filter(Boolean);
-      const totalDstRem = children.reduce((s, d) => s + (remaining[d.entity_id] || 0), 0);
-      children.forEach(dst => {
-        if (totalDstRem > 0 && srcRem > 0) {
-          const share = (remaining[dst.entity_id] || 0) / totalDstRem;
-          const flow = Math.min(share * srcRem, srcRem, remaining[dst.entity_id] || 0);
-          if (flow > 0.005) {
-            flows.push({ src, dst, kwh: flow });
-          }
-          remaining[dst.entity_id] = (remaining[dst.entity_id] || 0) - flow;
-          srcRem -= flow;
-        }
-      });
+      const srcFlows = _flowMatrix[src.entity_id] || {};
+      for (const dstEid of Object.keys(srcFlows)) {
+        const dst = dstBoxes.find(d => d.entity_id === dstEid);
+        if (dst && srcFlows[dstEid] > 0.005) flows.push({ src, dst, kwh: srcFlows[dstEid] });
+      }
     });
 
     // ── Minimize crossings: reorder destination nodes by weighted source position ──
@@ -8050,10 +8080,12 @@ class SigenergyEnergyFlowCard extends HTMLElement {
     });
 
     // Compute percentage for each node
+    const totalSrcFlow = srcBoxes.reduce((s, b) => s + (b.flowTotal || 0), 0);
+    const totalDstFlow = dstBoxes.reduce((s, b) => s + (b.flowTotal || 0), 0);
     const srcPcts = {};
-    srcBoxes.forEach(b => { srcPcts[b.entity_id] = totalSrc > 0 ? ((b.kwh / totalSrc) * 100).toFixed(2) : '0'; });
+    srcBoxes.forEach(b => { srcPcts[b.entity_id] = totalSrcFlow > 0 ? (((b.flowTotal || 0) / totalSrcFlow) * 100).toFixed(2) : '0'; });
     const dstPcts = {};
-    dstBoxes.forEach(b => { dstPcts[b.entity_id] = totalDst > 0 ? ((b.kwh / totalDst) * 100).toFixed(2) : '0'; });
+    dstBoxes.forEach(b => { dstPcts[b.entity_id] = totalDstFlow > 0 ? (((b.flowTotal || 0) / totalDstFlow) * 100).toFixed(2) : '0'; });
 
     // Build SVG paths and gradients — FULL WIDTH flows (mySigen style)
     const gradients = [];
@@ -9167,39 +9199,17 @@ class SigenergySankeyPanel extends HTMLElement {
   }
 
   // Build the per-stream flow breakdown for a node and open the detail modal.
-  // Reuses the same greedy flow-allocation as the inline panel so the modal's
-  // "where it went / came from" split matches the Sankey diagram exactly.
+  // Uses the same seed + greedy flow allocation as the render pipeline so the
+  // modal's "where it went / came from" split matches the Sankey diagram.
   _openNodeModal(node) {
     if (!node) return;
     const meta = (this._config && this._config.nodes) || [];
     const val = this._getKwh(node.entity_id, node.add_entities);
 
-    // Greedy flow matrix: flowMatrix[srcEntity][dstEntity] = kWh
-    const allSources = meta.filter(n => n.type === 'source');
-    const allDests = meta.filter(n => n.type === 'dest');
-    const flowMatrix = {};
-    const remaining = {};
-    allDests.forEach(d => { remaining[d.entity_id] = this._getKwh(d.entity_id, d.add_entities); });
-    allSources.forEach(src => {
-      const srcVal = this._getKwh(src.entity_id, src.add_entities);
-      let srcRemaining = srcVal;
-      flowMatrix[src.entity_id] = {};
-      const childSet = new Set((src.children || []).filter(eid => remaining[eid] !== undefined));
-      allDests.forEach(d => { if ((d.parents || []).includes(src.entity_id)) childSet.add(d.entity_id); });
-      const children = [...childSet];
-      const totalDstRemaining = children.reduce((s, eid) => s + (remaining[eid] || 0), 0);
-      children.forEach(eid => {
-        if (totalDstRemaining > 0 && srcRemaining > 0) {
-          const share = (remaining[eid] || 0) / totalDstRemaining;
-          const flow = Math.min(share * srcVal, srcRemaining, remaining[eid] || 0);
-          flowMatrix[src.entity_id][eid] = flow;
-          remaining[eid] = (remaining[eid] || 0) - flow;
-          srcRemaining -= flow;
-        } else {
-          flowMatrix[src.entity_id][eid] = 0;
-        }
-      });
-    });
+    const minKwh = this._config.min_flow || 0.1;
+    const allSources = meta.filter(n => n.type === 'source' && this._getKwh(n.entity_id, n.add_entities) >= minKwh);
+    const allDests = meta.filter(n => n.type === 'dest' && this._getKwh(n.entity_id, n.add_entities) >= minKwh);
+    const flowMatrix = this._computeFlowMatrix(allSources, allDests);
 
     const targets = node.type === 'source' ? (node.children || []) : (node.parents || []);
     const breakdown = targets
@@ -9276,39 +9286,10 @@ class SigenergySankeyPanel extends HTMLElement {
     expandBtn.style.display = '';
     expandBtn.className = this._expanded ? 'expand-btn expanded' : 'expand-btn';
 
-    // Compute accurate energy flows using greedy allocation (same as ha-sankey-chart)
-    // The Sankey chart allocates flows source-by-source in order: Grid → Battery → Solar.
-    // Each source distributes to its children proportionally to their remaining capacity.
-    const allNodes = this._config.nodes || [];
-    const allSources = allNodes.filter(n => n.type === 'source');
-    const allDests = allNodes.filter(n => n.type === 'dest');
-    // Build a flow matrix: flowMatrix[srcId][dstId] = kWh
-    const flowMatrix = {};
-    const remaining = {};
-    // Initialize remaining capacity for each destination
-    allDests.forEach(d => { remaining[d.entity_id] = this._getKwh(d.entity_id, d.add_entities); });
-    // Greedy allocation: sources in order (Grid first = smallest, then Battery, then Solar)
-    allSources.forEach(src => {
-      const srcVal = this._getKwh(src.entity_id, src.add_entities);
-      let srcRemaining = srcVal;
-      flowMatrix[src.entity_id] = {};
-      const childSet = new Set((src.children || []).filter(eid => remaining[eid] !== undefined));
-      allDests.forEach(d => { if ((d.parents || []).includes(src.entity_id)) childSet.add(d.entity_id); });
-      const children = [...childSet];
-      // Proportional allocation to children based on their remaining capacity
-      const totalDstRemaining = children.reduce((s, eid) => s + (remaining[eid] || 0), 0);
-      children.forEach(eid => {
-        if (totalDstRemaining > 0 && srcRemaining > 0) {
-          const share = (remaining[eid] || 0) / totalDstRemaining;
-          const flow = Math.min(share * srcVal, srcRemaining, remaining[eid] || 0);
-          flowMatrix[src.entity_id][eid] = flow;
-          remaining[eid] = (remaining[eid] || 0) - flow;
-          srcRemaining -= flow;
-        } else {
-          flowMatrix[src.entity_id][eid] = 0;
-        }
-      });
-    });
+    const minKwh = this._config.min_flow || 0.1;
+    const allSources = meta.filter(n => n.type === 'source' && this._getKwh(n.entity_id, n.add_entities) >= minKwh);
+    const allDests = meta.filter(n => n.type === 'dest' && this._getKwh(n.entity_id, n.add_entities) >= minKwh);
+    const flowMatrix = this._computeFlowMatrix(allSources, allDests);
 
     // Now extract flows for the selected node
     const selectedVal = val;
@@ -10978,7 +10959,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c GENERGY-DASHBOARD %c v2.25.0 ',
+  '%c GENERGY-DASHBOARD %c v2.25.1 ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );

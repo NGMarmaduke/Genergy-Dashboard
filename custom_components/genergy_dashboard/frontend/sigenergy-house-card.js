@@ -250,6 +250,7 @@ class SigenergyHouseCard extends LitElement {
       battery:  { x: 200, y: 650, w: 300, h: 280, color: '#2ecc71', label: 'BATTERY' },
       grid:     { x: 700, y: 550, w: 300, h: 280, color: '#e74c3c', label: 'GRID' },
       ev:       { x: 0,   y: 450, w: 200, h: 250, color: '#ff69b4', label: 'EV' },
+      ev2:      { x: 290, y: 450, w: 200, h: 250, color: '#ff69b4', label: 'EV 2' },
       heatpump: { x: 850, y: 350, w: 250, h: 250, color: '#e67e22', label: 'HEAT PUMP' },
     };
   }
@@ -1129,6 +1130,7 @@ class SigenergyHouseCard extends LitElement {
       <g class="click-zones">
         ${zones.filter(z => {
           if (z.key === 'ev' && !this._showEvVehicle && !this._showEvCharger) return false;
+          if (z.key === 'ev2' && (!this._twoEvGarage || !this._showEv2Vehicle)) return false;
           if (z.key === 'heatpump' && !this._config.features.heat_pump) return false;
           if (z.key === 'grid' && !this._config.features.grid) return false;
           return true;

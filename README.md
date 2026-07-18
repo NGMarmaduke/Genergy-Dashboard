@@ -7,11 +7,11 @@
 
 A fully configurable Home Assistant Lovelace dashboard for monitoring solar, battery, and grid energy systems. Features animated power flow visualization, real-time energy charts with EMHASS, HAEO, and Energy Manager forecast overlays, battery pack monitoring, and a 4-tab settings UI for complete customization — no YAML editing required.
 
+> **New in `v2.25.1`**: **Sankey energy flow accuracy fix** (issue #36) — grid import is now correctly prioritized for battery charging via conservation seed flows, fixing the mismatch where solar was incorrectly shown charging the battery. Also fixes a compounding under-allocation bug, adds flow consistency across all views, **EV 2 clickable detail modal** on the house card, and an optional **Time to Full Charge** entity field for both EVs.
+>
 > **New in `v2.25.0`**: a **two-EV / two-car garage house scene** — set *Number of EV Chargers = 2* and the house switches to a two-bay garage that tracks each EV independently (left/right bay opens per connected vehicle), each with its own **AC charger** (drag-positionable) and **flow cable**. Plus the latest EMS event cards (EM `v2.8.28`, HAEO `v3.2.69`, EMHASS `v2.6.7`), a **Forecasts "Past Events"** tab that now works on non-Sigenergy inverters (Deye/SolaX/Goodwe) with real prices, consolidated EV labels, toggles for the EV panel/labels, and forecast-chart fixes (blank-space, sunrise/sunset, transparent settings modal).
 >
 > **New in `v2.23.1`**: an optional **Show Battery Stack on Dashboard** toggle (adds the battery pack stack as a third column beside the Sankey on wide screens, responsive/Safari-safe), optional **per-pack battery detail entity overrides** (up to 8 packs), smarter **battery detail auto-detection** (fixes "—" rows on BMS like Gobel), **conditional EV charger cards** (no more "Not configured" placeholders), tap-to-expand battery pills on mobile, and a Sankey label-alignment fix.
->
-> **New in `v2.23.0`**: **two AC EV chargers** with a per-vehicle Power/SoC/Range/State panel, **interactive Sankey stream modals** (click any energy-flow node for a where-it-went / where-it-came-from breakdown), native **HAEO & Energy Manager event cards**, an **Energy Manager (Node-RED)** EMS provider, configurable Solar/Home/Grid labels, daily cost/revenue without an EMS, interactive house-card detail modals, smart-load modal controls, draggable label positions, and a fix for the false-positive "HTML Template Card missing" notification.
 
 > **Inverter-agnostic**: Works with **any** solar/battery inverter (Deye, SunSynk, Sigenergy, Huawei, Fronius, SolarEdge, Enphase, etc.) — just map your entity IDs in the Settings tab.
 

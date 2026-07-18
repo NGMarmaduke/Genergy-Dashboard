@@ -2,6 +2,19 @@
 
 All notable changes to the Genergy Dashboard are documented here.
 
+## [2.25.1] - 2026-07-18
+
+Sankey energy flow accuracy fix (issue #36) and EV 2 modal improvements.
+
+### Fixed
+- **Sankey energy flow mismatch** (issue #36) — The Sankey chart now uses a unified flow allocation algorithm with **conservation seed flows**: grid import is prioritized for battery charging before solar is allocated, matching real inverter behavior. Previously, the proportional greedy algorithm incorrectly showed solar charging the battery when grid was the actual source. The fix also corrects a compounding under-allocation bug in the render pipeline (`share * srcRem` replaced with `share * srcVal`) that stranded up to ~29% of source energy on multi-destination nodes.
+- **Sankey flow consistency** — The render pipeline, node detail modal, and info panel now share a single `_computeFlowMatrix` method, ensuring all three views show identical flow breakdowns. The `min_flow` filter (default 0.1 kWh) is now applied consistently in all three paths.
+- **Sankey percentage labels** — Node percentage labels now use flow-based values (matching bar heights) instead of raw entity values, so the displayed percentage matches the visual proportion.
+- **EV 2 detail modal on house card** — Clicking the EV 2 zone on the house card now opens its own detail modal with EV 2-specific metrics (was silently failing because `ev2` was missing from the modal type registry).
+
+### Added
+- **Time to full charge** — New optional `ev_time_to_full` / `ev2_time_to_full` entity fields (Settings -> Entities -> EV) shown in the EV detail modal when configured. Works with any EV integration that exposes a "time to full" sensor (Tesla, Easee, Zaptec, Wallbox, etc.).
+
 ## [2.25.0] - 2026-07-12
 
 A second EV / two-car garage for the house card, latest EMS event cards, and a round of Forecasts fixes so the **"X Forecasts"** modal works across every supported EMS (EMHASS, HAEO, Energy Manager).
