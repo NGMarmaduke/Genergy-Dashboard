@@ -2,6 +2,34 @@
 
 All notable changes to the Genergy Dashboard are documented here.
 
+## [2.26.0] - 2026-07-18
+
+Major cable editor overhaul, EV 2 Sankey support, dashboard section toggles, and a new simplified chart mode.
+
+### Added
+- **Cable Path Editor: full-screen modal with zoom and pan** -- The editor now opens as a full-screen overlay with scroll-to-zoom (0.5x-5x, cursor-centered like Google Maps), drag-to-pan, and zoom controls (+, -, reset %) in the header. Makes it practical to position cable points on fine details like individual solar panels.
+- **Cable Path Editor: click-to-place and right-click-to-delete** -- With a path selected, click the canvas to append a new control point (snapped to 5px grid). Right-click a point (or near one) to remove it. Previously you could only drag existing points or use +pt/-pt buttons.
+- **Cable Path Editor: active-path focus and visibility toggles** -- A "Draw Path" selector highlights which path is being edited. Only the active path shows draggable circles; inactive paths render as thin dim lines. A "Show/Hide" panel lets you toggle individual paths and the SoC ring on/off, eliminating the visual overload when many paths are present.
+- **Cable Path Editor: cancel without saving** -- A dedicated Cancel button exits the editor without applying changes, reverting the dashboard config.
+- **EV 2 in Sankey graph** -- Second EV charger can now appear as a separate destination node in the Sankey energy flow diagram with its own color, energy entity, cumulative sensor support, and utility meter. Toggle in Settings -> Entities -> EV 2.
+- **Dashboard section visibility toggles** -- New "Dashboard Sections" panel in Display settings lets you independently show/hide the House Card, Sankey diagram, Energy Chart, Smart Loads, and System Insights sections. The responsive grid adapts column count automatically.
+- **Chart mode: detailed vs simplified** -- New toggle in Display settings. Simplified mode hides SOC traces, price overlays, and forecast SOC lines while keeping power series and solar forecasts. Series switch from line to filled area style for a cleaner look.
+- **Solar Coverage stat card** -- New card showing solar production as a percentage of home consumption, displayed alongside the existing Self-Sufficiency card.
+- **EV 2 cable path color** -- The `ev2` cable path has its own distinct color (#D4605A) in the editor, separate from EV 1.
+
+### Improved
+- **Cable editor declutter** -- Inactive paths now show only thin semi-transparent lines (no circles, no labels). Active path shows smaller circles (r=16 vs r=22) with just the point index number. Coordinate text removed entirely.
+- **SVG coordinate accuracy** -- Replaced `getScreenCTM().inverse()` with `getBoundingClientRect()`-based linear interpolation for converting mouse clicks to SVG viewBox coordinates. Eliminates offset drift when CSS transforms (zoom/pan) are applied to ancestor elements.
+- **Self-sufficiency calculation** -- Now uses `(1 - grid_import / load)` when a grid import sensor is available, which is more accurate than the previous `solar / load` approximation. Falls back to the old formula when grid import is not configured.
+- **Configuration profiles stored in HA** -- Profiles migrated from browser localStorage to the HA config store, so they persist across devices and browsers. Existing localStorage profiles are auto-migrated on first load.
+- **Static cables hidden during editing** -- The normal cable backbone, labels, weather overlay, SoC ring, and comet animations are all suppressed while the cable editor is open, so only the editable path overlays are visible against the clean house image.
+- **Responsive layout refactored** -- Replaced hardcoded CSS variants with a dynamic generator that builds grid rules based on the actual number of visible top-row sections (0-3 columns).
+
+### Fixed
+- **Right-click triggered drag** -- `_onDragStart` now guards on `e.button !== 0`, so right-click no longer accidentally starts a drag operation.
+- **Click-after-drag placing unwanted points** -- A `_justDragged` / `_justPanned` flag prevents a drag/pan release from being misinterpreted as a click-to-place action.
+- **Scroll-wheel zoom not intercepted** -- The wheel listener now attaches to `document` with `{ capture: true }` so it intercepts scroll events before the HA dashboard scroll container can consume them.
+
 ## [2.25.1] - 2026-07-18
 
 Sankey energy flow accuracy fix (issue #36) and EV 2 modal improvements.

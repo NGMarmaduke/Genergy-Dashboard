@@ -1,5 +1,5 @@
 /**
- * Sigenergy House Card v3.16.2 — Lit Element Custom Card for Home Assistant
+ * Sigenergy House Card v3.17.0 — Lit Element Custom Card for Home Assistant
  * Replaces YAML button-card approach with proper SVG-based energy flow visualization.
  *
  * Architecture:
@@ -171,6 +171,11 @@ class SigenergyHouseCard extends LitElement {
       _dragging: { type: Object, state: true },
       _editRing: { type: Object, state: true },
       _hpDragging: { type: Object, state: true },
+      _hiddenEditorPaths: { type: Object, state: true },
+      _activePath: { type: String, state: true },
+      _zoom: { type: Number, state: true },
+      _panX: { type: Number, state: true },
+      _panY: { type: Number, state: true },
     };
   }
 
@@ -212,6 +217,7 @@ class SigenergyHouseCard extends LitElement {
     // Parse path strings into arrays of {x,y} points for the editor
     const configPaths = this._config.paths || {};
     this._editPaths = {};
+    if (!this._hiddenEditorPaths) this._hiddenEditorPaths = new Set();
     const SKIP = new Set(['solar_anim']); // derived paths
     for (const [name, defaultD] of Object.entries(PATHS)) {
       if (SKIP.has(name)) continue;
@@ -635,7 +641,7 @@ class SigenergyHouseCard extends LitElement {
 
   // ── Render: SVG static cable backbones ───────────────────────────────────
   _renderStaticPaths() {
-    if (this._config.features.hide_cables) return svg``;
+    if (this._config.features.hide_cables || this._isEditMode) return svg``;
     const color = this._config.colors.cable_static;
     const pathNames = ['solar', 'home', 'battery'];
     if (this._config.features.grid) {
@@ -777,6 +783,12 @@ class SigenergyHouseCard extends LitElement {
     return this._isEditMode || this._isZoneEditMode || this._isLabelEditMode || this._isAssetEditMode;
   }
 
+  _toggleEditorPath(name) {
+    const s = new Set(this._hiddenEditorPaths || []);
+    if (s.has(name)) s.delete(name); else s.add(name);
+    this._hiddenEditorPaths = s;
+  }
+
   _renderEditor() {
     if (!this._isEditMode) return svg``;
     const pathColors = {
@@ -785,39 +797,42 @@ class SigenergyHouseCard extends LitElement {
       battery: '#2ecc71',
       grid: '#e74c3c',
       ev: '#ff69b4',
+      ev2: '#D4605A',
       heat_pump: '#e67e22',
     };
+    const hidden = this._hiddenEditorPaths || new Set();
 
     const handles = [];
+    const active = this._activePath;
     for (const [name, points] of Object.entries(this._editPaths)) {
+      if (hidden.has(name)) continue;
       const color = pathColors[name] || '#fff';
-      // Render the path with bright color in edit mode
+      const isActive = name === active;
       const d = this._pointsToPath(points);
       handles.push(svg`
-        <path d="${d}" stroke="${color}" stroke-width="5" fill="none"
-              stroke-linecap="round" stroke-linejoin="round" opacity="0.8" />
+        <path d="${d}" stroke="${color}" stroke-width="${isActive ? 5 : 3}" fill="none"
+              stroke-linecap="round" stroke-linejoin="round" opacity="${isActive ? 0.9 : 0.4}" />
       `);
-      // Render each control point as a draggable circle
-      points.forEach((pt, idx) => {
-        handles.push(svg`
-          <circle cx="${pt.x}" cy="${pt.y}" r="16"
-                  fill="${color}" fill-opacity="0.3" stroke="${color}" stroke-width="3"
-                  style="cursor: grab; pointer-events: all;"
-                  data-path="${name}" data-idx="${idx}"
-                  @pointerdown="${(e) => this._onDragStart(e, name, idx)}" />
-          <text x="${pt.x + 20}" y="${pt.y - 10}"
-                fill="${color}" font-size="22" font-weight="bold"
-                style="pointer-events: none; user-select: none;"
-                >${name}[${idx}]</text>
-          <text x="${pt.x + 20}" y="${pt.y + 14}"
-                fill="#fff" font-size="20" font-weight="bold"
-                style="pointer-events: none; user-select: none;"
-                >(${Math.round(pt.x)}, ${Math.round(pt.y)})</text>
-        `);
-      });
+      if (isActive) {
+        points.forEach((pt, idx) => {
+          handles.push(svg`
+            <circle cx="${pt.x}" cy="${pt.y}" r="16"
+                    fill="${color}" fill-opacity="0.25" stroke="${color}" stroke-width="2.5"
+                    style="cursor: grab; pointer-events: all;"
+                    data-path="${name}" data-idx="${idx}"
+                    @pointerdown="${(e) => this._onDragStart(e, name, idx)}"
+                    @contextmenu="${(e) => this._onPointRightClick(e, name, idx)}" />
+            <text x="${pt.x + 14}" y="${pt.y - 6}"
+                  fill="${color}" font-size="16" font-weight="bold"
+                  style="pointer-events: none; user-select: none;"
+                  >${idx}</text>
+          `);
+        });
+      }
     }
 
     // ── SoC Ring editor handle ──────────────────────────────────────────────
+    if (!hidden.has('soc_ring')) {
     const ring = this._editRing || { cx: 498, cy: 585, r: 32, skewX: 0, skewY: 0 };
     const ringColor = '#00d4b8';
     const skX = ring.skewX || 0;
@@ -825,7 +840,6 @@ class SigenergyHouseCard extends LitElement {
     const ringTransform = (skX || skY)
       ? `translate(${ring.cx},${ring.cy}) skewX(${skX}) skewY(${skY}) translate(${-ring.cx},${-ring.cy})`
       : '';
-    // Show the ring outline (with skew applied)
     handles.push(svg`
       <g transform="${ringTransform}">
         <circle cx="${ring.cx}" cy="${ring.cy}" r="${ring.r}"
@@ -833,7 +847,6 @@ class SigenergyHouseCard extends LitElement {
                 stroke-dasharray="6 4" />
       </g>
     `);
-    // Center drag handle (move cx/cy)
     handles.push(svg`
       <circle cx="${ring.cx}" cy="${ring.cy}" r="14"
               fill="${ringColor}" fill-opacity="0.4" stroke="${ringColor}" stroke-width="3"
@@ -852,7 +865,6 @@ class SigenergyHouseCard extends LitElement {
             style="pointer-events: none; user-select: none;"
             >skew(${skX.toFixed(1)}, ${skY.toFixed(1)})</text>
     `);
-    // Edge drag handle (resize radius) — placed at 3 o'clock (cx+r, cy)
     handles.push(svg`
       <circle cx="${ring.cx + ring.r}" cy="${ring.cy}" r="10"
               fill="#fff" fill-opacity="0.3" stroke="${ringColor}" stroke-width="2"
@@ -863,7 +875,6 @@ class SigenergyHouseCard extends LitElement {
             style="pointer-events: none; user-select: none;"
             >r</text>
     `);
-    // Skew X handle — placed at 12 o'clock (cx, cy-r-20), drag horizontally to change skewX
     handles.push(svg`
       <rect x="${ring.cx - 12}" y="${ring.cy - ring.r - 28}" width="24" height="16" rx="4"
             fill="#ff9" fill-opacity="0.3" stroke="#ff9" stroke-width="2"
@@ -874,7 +885,6 @@ class SigenergyHouseCard extends LitElement {
             style="pointer-events: none; user-select: none;"
             >sX</text>
     `);
-    // Skew Y handle — placed at 9 o'clock (cx-r-20, cy), drag vertically to change skewY
     handles.push(svg`
       <rect x="${ring.cx - ring.r - 36}" y="${ring.cy - 8}" width="24" height="16" rx="4"
             fill="#9ff" fill-opacity="0.3" stroke="#9ff" stroke-width="2"
@@ -885,24 +895,24 @@ class SigenergyHouseCard extends LitElement {
             style="pointer-events: none; user-select: none;"
             >sY</text>
     `);
+    } // end soc_ring hidden check
 
     return svg`<g class="editor-handles">${handles}</g>`;
   }
 
   _svgPoint(e) {
-    // Convert screen coordinates to SVG viewBox coordinates
     const svgEl = this.shadowRoot.querySelector('.flow-svg');
     if (!svgEl) return { x: 0, y: 0 };
-    const pt = svgEl.createSVGPoint();
-    pt.x = e.clientX;
-    pt.y = e.clientY;
-    const ctm = svgEl.getScreenCTM();
-    if (!ctm) return { x: 0, y: 0 };
-    const svgPt = pt.matrixTransform(ctm.inverse());
-    return { x: svgPt.x, y: svgPt.y };
+    const rect = svgEl.getBoundingClientRect();
+    if (!rect.width || !rect.height) return { x: 0, y: 0 };
+    return {
+      x: (e.clientX - rect.left) / rect.width * VB_W,
+      y: (e.clientY - rect.top) / rect.height * VB_H,
+    };
   }
 
   _onDragStart(e, pathName, pointIdx) {
+    if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
     this._dragging = { pathName, pointIdx };
@@ -919,10 +929,10 @@ class SigenergyHouseCard extends LitElement {
     };
 
     const onUp = () => {
+      if (this._dragging) this._justDragged = true;
       this._dragging = null;
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      // Log current paths to console for easy copy
       this._logPaths();
     };
 
@@ -994,6 +1004,140 @@ class SigenergyHouseCard extends LitElement {
     console.info(JSON.stringify(ring));
   }
 
+  _pathColor(name) {
+    const c = {solar:'#F0D850',home:'#3498db',battery:'#2ecc71',grid:'#e74c3c',ev:'#ff69b4',ev2:'#D4605A',heat_pump:'#e67e22'};
+    return c[name] || '#fff';
+  }
+
+  _setActivePath(name) {
+    this._activePath = this._activePath === name ? null : name;
+  }
+
+  _onSvgClick(e) {
+    if (!this._activePath || !this._editPaths[this._activePath]) return;
+    if (this._justDragged) { this._justDragged = false; return; }
+    if (this._justPanned) { this._justPanned = false; return; }
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'circle' || tag === 'rect' || tag === 'text') return;
+    const svgPt = this._svgPoint(e);
+    const x = Math.round(svgPt.x / 5) * 5;
+    const y = Math.round(svgPt.y / 5) * 5;
+    const pts = [...this._editPaths[this._activePath], { x, y }];
+    this._editPaths = { ...this._editPaths, [this._activePath]: pts };
+    this._logPaths();
+  }
+
+  _onPointRightClick(e, name, idx) {
+    e.preventDefault();
+    e.stopPropagation();
+    const pts = [...this._editPaths[name]];
+    pts.splice(idx, 1);
+    this._editPaths = { ...this._editPaths, [name]: pts };
+    this._logPaths();
+  }
+
+  _onSvgRightClick(e) {
+    e.preventDefault();
+    if (!this._activePath || !this._editPaths[this._activePath]) return;
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'circle') return;
+    const svgPt = this._svgPoint(e);
+    const pts = this._editPaths[this._activePath];
+    if (!pts || pts.length === 0) return;
+    let nearest = -1, minDist = Infinity;
+    pts.forEach((p, i) => {
+      const d = Math.hypot(p.x - svgPt.x, p.y - svgPt.y);
+      if (d < minDist) { minDist = d; nearest = i; }
+    });
+    if (nearest >= 0 && minDist < 60) {
+      const newPts = [...pts];
+      newPts.splice(nearest, 1);
+      this._editPaths = { ...this._editPaths, [this._activePath]: newPts };
+      this._logPaths();
+    }
+  }
+
+  _boundWheel = null;
+
+  updated(changedProps) {
+    super.updated(changedProps);
+    const shouldListen = this._isEditMode;
+    if (shouldListen && !this._boundWheel) {
+      this._boundWheel = (e) => {
+        const container = this.shadowRoot?.querySelector('.modal-house');
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        if (e.clientX < rect.left || e.clientX > rect.right ||
+            e.clientY < rect.top || e.clientY > rect.bottom) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const oldZ = this._zoom || 1;
+        const delta = e.deltaY > 0 ? -0.1 : 0.1;
+        const newZ = Math.min(5, Math.max(0.5, oldZ + delta));
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        this._panX = (this._panX || 0) + mx * (1 - newZ / oldZ);
+        this._panY = (this._panY || 0) + my * (1 - newZ / oldZ);
+        if (newZ === 1) { this._panX = 0; this._panY = 0; }
+        this._zoom = newZ;
+      };
+      document.addEventListener('wheel', this._boundWheel, { capture: true, passive: false });
+    } else if (!shouldListen && this._boundWheel) {
+      document.removeEventListener('wheel', this._boundWheel, { capture: true });
+      this._boundWheel = null;
+    }
+  }
+
+  _onSvgPanStart(e) {
+    if (e.button !== 0) return;
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'circle') return;
+    const startX = e.clientX, startY = e.clientY;
+    const startPanX = this._panX || 0, startPanY = this._panY || 0;
+    let panning = false;
+    const onMove = (ev) => {
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      if (!panning && Math.hypot(dx, dy) < 5) return;
+      panning = true;
+      this._panX = startPanX + dx;
+      this._panY = startPanY + dy;
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      if (panning) this._justPanned = true;
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }
+
+  _resetZoom() {
+    this._zoom = 1;
+    this._panX = 0;
+    this._panY = 0;
+  }
+
+  async _onCancelEditor() {
+    try {
+      const dashConfig = await this.hass.callWS({
+        type: 'lovelace/config', url_path: 'dashboard-sigenergy',
+      });
+      if (this._patchHouseCard(dashConfig, { edit_paths: false })) {
+        await this.hass.callWS({
+          type: 'lovelace/config/save',
+          url_path: 'dashboard-sigenergy',
+          config: dashConfig,
+        });
+      }
+    } catch (err) {
+      this._config = { ...this._config, edit_paths: false };
+      this._initEditPaths();
+      this.requestUpdate();
+    }
+    this._activePath = null;
+    this._resetZoom();
+  }
+
   _onCopyPaths() {
     const result = {};
     for (const [name, points] of Object.entries(this._editPaths)) {
@@ -1055,7 +1199,7 @@ class SigenergyHouseCard extends LitElement {
     const name = e.target.dataset.path;
     if (!name || !this._editPaths[name]) return;
     const pts = [...this._editPaths[name]];
-    if (pts.length > 2) {
+    if (pts.length > 0) {
       pts.pop();
       this._editPaths = { ...this._editPaths, [name]: pts };
     }
@@ -1089,8 +1233,10 @@ class SigenergyHouseCard extends LitElement {
           url_path: 'dashboard-sigenergy',
           config: dashConfig,
         });
+        this._activePath = null;
+        this._resetZoom();
         console.info('%c PATHS APPLIED & SAVED', 'color: #00d4b8; font-weight: bold;');
-        return; // HA will rebuild the card with new config
+        return;
       }
     } catch (err) {
       console.error('Failed to save paths:', err);
@@ -1563,9 +1709,30 @@ class SigenergyHouseCard extends LitElement {
       return html`<ha-card><div class="loading">Loading...</div></ha-card>`;
     }
 
+    const _isModal = this._isEditMode;
+    if (_isModal) { this.setAttribute('data-modal', ''); } else { this.removeAttribute('data-modal'); }
+    const _hidden = this._hiddenEditorPaths || new Set();
+
     return html`
-      <ha-card>
-        <div class="house-container">
+      <ha-card class="${_isModal ? 'editor-modal' : ''}">
+        ${_isModal ? html`
+          <div class="cable-editor-header">
+            <span class="cable-editor-title">Cable Path Editor</span>
+            <span class="cable-editor-hint">
+              ${this._activePath
+                ? html`Click to place points on <b style="color:${this._pathColor(this._activePath)}">${this._activePath}</b>. Right-click to delete point.`
+                : 'Select a path below, then click to place points. Scroll to zoom, drag to pan.'}
+            </span>
+            <span class="zoom-controls">
+              <button class="zoom-btn" @click="${() => { this._zoom = Math.min(5, (this._zoom || 1) + 0.25); }}">+</button>
+              <button class="zoom-btn" @click="${this._resetZoom}">${Math.round((this._zoom || 1) * 100)}%</button>
+              <button class="zoom-btn" @click="${() => { this._zoom = Math.max(0.5, (this._zoom || 1) - 0.25); }}">-</button>
+            </span>
+            <button class="cable-editor-close" @click="${this._onCancelEditor}">✕</button>
+          </div>
+        ` : ''}
+        <div class="house-container${_isModal ? ' modal-house' : ''}"
+             style="${_isModal ? `transform: translate(${this._panX || 0}px, ${this._panY || 0}px) scale(${this._zoom || 1}); transform-origin: 0 0;` : ''}">
           <img class="height-driver" src="${this._baseImage}"
                @error="${(e) => e.target.style.display = 'none'}" />
 
@@ -1596,9 +1763,13 @@ class SigenergyHouseCard extends LitElement {
             @error="${(e) => e.target.style.display = 'none'}"
             @pointerdown="${this._isAssetEditMode ? (e) => this._onHpDragStart(e) : null}" />` : ''}
 
-          <svg class="flow-svg ${this._isEditMode || this._isZoneEditMode ? 'edit-active' : ''}"
+          <svg class="flow-svg ${_isModal || this._isZoneEditMode ? 'edit-active' : ''}"
                viewBox="0 0 ${VB_W} ${VB_H}"
-               preserveAspectRatio="xMidYMid meet">
+               preserveAspectRatio="xMidYMid meet"
+               style="${_isModal ? (this._activePath ? 'cursor: crosshair;' : 'cursor: grab;') : ''}"
+               @click="${_isModal ? (e) => this._onSvgClick(e) : null}"
+               @pointerdown="${_isModal ? (e) => this._onSvgPanStart(e) : null}"
+               @contextmenu="${_isModal ? (e) => this._onSvgRightClick(e) : null}">
             <defs>
               <filter id="cometGlow" x="-40%" y="-40%" width="180%" height="180%">
                 <feGaussianBlur stdDeviation="4" result="blur" />
@@ -1610,23 +1781,81 @@ class SigenergyHouseCard extends LitElement {
             </defs>
             ${this._renderStaticPaths()}
             <g>
-            ${this._isEditMode || this._isZoneEditMode ? svg`` : this._renderComets()}
+            ${_isModal || this._isZoneEditMode ? svg`` : this._renderComets()}
             </g>
-            ${this._isEditMode ? svg`` : this._renderSocRing()}
+            ${_isModal ? svg`` : this._renderSocRing()}
             ${this._renderEditor()}
             ${this._renderClickZones()}
           </svg>
 
-          ${this._renderLabel("solar")}
-          ${this._renderLabel("home")}
-          ${this._renderLabel("battery")}
-          ${this._renderLabel("grid")}
-          ${this._renderLabel("ev")}
-          ${this._renderLabel("ev2")}
-          ${this._renderLabel("ac")}
-          ${this._renderLabel("heatpump")}
-          ${this._renderWeather()}
+          ${!_isModal ? this._renderLabel("solar") : ''}
+          ${!_isModal ? this._renderLabel("home") : ''}
+          ${!_isModal ? this._renderLabel("battery") : ''}
+          ${!_isModal ? this._renderLabel("grid") : ''}
+          ${!_isModal ? this._renderLabel("ev") : ''}
+          ${!_isModal ? this._renderLabel("ev2") : ''}
+          ${!_isModal ? this._renderLabel("ac") : ''}
+          ${!_isModal ? this._renderLabel("heatpump") : ''}
+          ${!_isModal ? this._renderWeather() : ''}
         </div>
+        ${_isModal ? html`
+          <div class="editor-panel modal-editor-panel">
+            <div class="editor-row">
+              <div class="editor-section">
+                <div class="editor-section-label">Show / Hide</div>
+                <div class="editor-visibility">
+                  ${Object.keys(this._editPaths).map(name => {
+                    const c = this._pathColor(name);
+                    const vis = !_hidden.has(name);
+                    return html`
+                      <button class="vis-btn ${vis ? '' : 'vis-off'}"
+                              style="--vis-color: ${c}"
+                              @click="${() => this._toggleEditorPath(name)}">
+                        <span class="vis-dot" style="background: ${vis ? c : '#555'}"></span>
+                        ${name}
+                      </button>`;
+                  })}
+                  <button class="vis-btn ${!_hidden.has('soc_ring') ? '' : 'vis-off'}"
+                          style="--vis-color: #00d4b8"
+                          @click="${() => this._toggleEditorPath('soc_ring')}">
+                    <span class="vis-dot" style="background: ${!_hidden.has('soc_ring') ? '#00d4b8' : '#555'}"></span>
+                    soc_ring
+                  </button>
+                </div>
+              </div>
+              <div class="editor-section">
+                <div class="editor-section-label">Draw Path <span class="editor-section-sub">(click to select, then click on image)</span></div>
+                <div class="editor-visibility">
+                  ${Object.keys(this._editPaths).filter(n => !_hidden.has(n)).map(name => {
+                    const c = this._pathColor(name);
+                    const active = this._activePath === name;
+                    return html`
+                      <button class="vis-btn draw-btn ${active ? 'draw-active' : ''}"
+                              style="--vis-color: ${c}"
+                              @click="${() => this._setActivePath(name)}">
+                        <span class="vis-dot" style="background: ${c}"></span>
+                        ${name}
+                        ${active ? html`<span class="draw-indicator">✎</span>` : ''}
+                      </button>`;
+                  })}
+                </div>
+              </div>
+            </div>
+            <div class="editor-actions">
+              <button class="apply-btn" @click="${this._onApplyPaths}">✓ Apply & Close</button>
+              <button class="cancel-btn" @click="${this._onCancelEditor}">✕ Cancel</button>
+              <button class="copy-btn" @click="${this._onCopyPaths}">Copy Paths</button>
+              <span class="editor-sep"></span>
+              ${Object.keys(this._editPaths).filter(n => !_hidden.has(n)).map(name => html`
+                <span class="path-controls">
+                  <span class="path-name" style="color: ${this._pathColor(name)}">${name}</span>
+                  <button class="sm-btn" data-path="${name}" @click="${this._onAddPoint}">+pt</button>
+                  <button class="sm-btn" data-path="${name}" @click="${this._onRemovePoint}">-pt</button>
+                </span>
+              `)}
+            </div>
+          </div>
+        ` : ''}
           ${this._isLabelEditMode ? html`
           <div class="editor-panel">
             <div class="editor-title">Label Position Editor</div>
@@ -1643,22 +1872,6 @@ class SigenergyHouseCard extends LitElement {
             <div class="editor-actions">
               <button class="apply-btn" @click="${this._onApplyZones}">✓ Save Zones</button>
               <button class="copy-btn" @click="${this._onCopyZones}">Copy Zones</button>
-            </div>
-          </div>
-        ` : this._isEditMode ? html`
-          <div class="editor-panel">
-            <div class="editor-title">Cable Path Editor</div>
-            <div class="editor-hint">Drag circles to reposition cable points. Coordinates snap to grid of 5.</div>
-            <div class="editor-actions">
-              <button class="apply-btn" @click="${this._onApplyPaths}">\u2713 Apply & Close</button>
-              <button class="copy-btn" @click="${this._onCopyPaths}">Copy Paths</button>
-              ${Object.keys(this._editPaths).map(name => html`
-                <span class="path-controls">
-                  <span class="path-name" style="color: ${{solar:'#F0D850',home:'#3498db',battery:'#2ecc71',grid:'#e74c3c',ev:'#ff69b4'}[name]||'#fff'}">${name}</span>
-                  <button class="sm-btn" data-path="${name}" @click="${this._onAddPoint}">+pt</button>
-                  <button class="sm-btn" data-path="${name}" @click="${this._onRemovePoint}">-pt</button>
-                </span>
-              `)}
             </div>
           </div>
         ` : this._isAssetEditMode && this._config.features.heat_pump ? html`
@@ -1900,6 +2113,237 @@ class SigenergyHouseCard extends LitElement {
 
       .sm-btn:hover {
         background: #4a4f5e;
+      }
+
+      .editor-visibility {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin-bottom: 8px;
+      }
+
+      .vis-btn {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        background: rgba(255,255,255,0.08);
+        border: 1px solid var(--vis-color, #fff);
+        color: #e0e4ec;
+        padding: 3px 10px;
+        border-radius: 14px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+
+      .vis-btn:hover {
+        background: rgba(255,255,255,0.15);
+      }
+
+      .vis-btn.vis-off {
+        opacity: 0.4;
+        border-color: #555;
+        text-decoration: line-through;
+      }
+
+      .vis-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+
+      /* ── Modal Cable Editor ──────────────────────────────────────── */
+      :host([data-modal]) {
+        position: fixed !important;
+        inset: 0 !important;
+        z-index: 9999 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        max-width: none !important;
+        overflow: visible !important;
+        padding: 0 !important;
+        margin: 0 !important;
+      }
+
+      ha-card.editor-modal {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        width: 100vw !important;
+        height: 100vh !important;
+        max-width: none !important;
+        z-index: 9999;
+        background: rgba(10, 14, 22, 0.97) !important;
+        border-radius: 0 !important;
+        display: flex;
+        flex-direction: column;
+        margin: 0 !important;
+        padding: 0 !important;
+        box-shadow: none !important;
+        overflow: hidden;
+      }
+
+      .cable-editor-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 16px;
+        background: #1e2330;
+        border-bottom: 1px solid #3a3f4e;
+        flex-shrink: 0;
+      }
+
+      .cable-editor-title {
+        font-size: 15px;
+        font-weight: 700;
+        color: #00d4b8;
+        white-space: nowrap;
+      }
+
+      .cable-editor-hint {
+        font-size: 12px;
+        color: #8892a4;
+        flex: 1;
+      }
+
+      .cable-editor-close {
+        background: rgba(255,60,60,0.15);
+        color: #ff6b6b;
+        border: 1px solid rgba(255,60,60,0.3);
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        font-size: 16px;
+        font-weight: 700;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        transition: all 0.15s;
+      }
+
+      .cable-editor-close:hover {
+        background: rgba(255,60,60,0.3);
+      }
+
+      .zoom-controls {
+        display: flex;
+        gap: 4px;
+        flex-shrink: 0;
+      }
+
+      .zoom-btn {
+        background: rgba(255,255,255,0.1);
+        color: #cdd6e4;
+        border: 1px solid #3a3f4e;
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s;
+        min-width: 28px;
+        text-align: center;
+      }
+
+      .zoom-btn:hover {
+        background: rgba(255,255,255,0.2);
+      }
+
+      ha-card.editor-modal {
+        align-items: center;
+      }
+
+      ha-card.editor-modal > .modal-editor-panel {
+        width: 100%;
+      }
+
+      .modal-house {
+        flex: 0 1 auto;
+        width: fit-content !important;
+        max-width: 95vw;
+        margin: auto !important;
+        overflow: visible;
+      }
+
+      ha-card.editor-modal .modal-house .height-driver {
+        max-height: calc(100vh - 200px);
+        max-width: 95vw;
+        width: auto;
+      }
+
+      ha-card.editor-modal .modal-house .flow-svg {
+        height: auto;
+        aspect-ratio: 1170 / 1013;
+      }
+
+      .modal-editor-panel {
+        flex-shrink: 0;
+        max-height: 180px;
+        overflow-y: auto;
+      }
+
+      .editor-row {
+        display: flex;
+        gap: 20px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+
+      .editor-section {
+        flex: 1;
+        min-width: 200px;
+      }
+
+      .editor-section-label {
+        font-size: 11px;
+        font-weight: 600;
+        color: #8892a4;
+        margin-bottom: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .editor-section-sub {
+        font-weight: 400;
+        text-transform: none;
+        letter-spacing: 0;
+        color: #666;
+      }
+
+      .draw-btn.draw-active {
+        background: rgba(255,255,255,0.18) !important;
+        box-shadow: 0 0 0 2px var(--vis-color, #fff), 0 0 12px rgba(0,212,184,0.3);
+      }
+
+      .draw-indicator {
+        font-size: 13px;
+        margin-left: 2px;
+      }
+
+      .cancel-btn {
+        background: rgba(255,60,60,0.15);
+        color: #ff6b6b;
+        border: 1px solid rgba(255,60,60,0.3);
+        padding: 6px 14px;
+        border-radius: 6px;
+        font-weight: 700;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+
+      .cancel-btn:hover {
+        background: rgba(255,60,60,0.3);
+      }
+
+      .editor-sep {
+        width: 1px;
+        height: 24px;
+        background: #3a3f4e;
+        flex-shrink: 0;
       }
 
       /* Comet animation: pathLength=100, dasharray=8 92

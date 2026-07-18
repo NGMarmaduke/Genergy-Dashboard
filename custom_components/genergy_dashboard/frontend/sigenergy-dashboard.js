@@ -1,5 +1,5 @@
 /**
- * Genergy Dashboard v2.23.0-pre.1 — Bundled Distribution
+ * Genergy Dashboard v2.26.0 — Bundled Distribution
  * 
  * Self-contained Lit Element cards for Home Assistant.
  * No build step required — loads directly as an ES module.
@@ -203,9 +203,11 @@ const DEFAULT_CONFIG = {
     three_phase: false,
     dual_tariff: false,
     show_ev_in_sankey: false,
+    show_ev2_in_sankey: false,
     show_hp_in_sankey: false,
     show_losses_in_sankey: true,
     ev_energy_is_cumulative: false,
+    ev2_energy_is_cumulative: false,
     hp_energy_is_cumulative: false,
     battery_positive_charging: true,
     battery_runtime: true,
@@ -220,6 +222,7 @@ const DEFAULT_CONFIG = {
     expandable_forecast: true,
   },
   smart_loads: [],
+  profiles: [],
   click_zones: {},
   label_positions: {},
   heat_pump_position: null,
@@ -239,6 +242,7 @@ const DEFAULT_CONFIG = {
     decimal_places: 1,
     chart_range: 'today',
     chart_refresh_interval: '5min',
+    chart_mode: 'detailed',
     soc_ring_low: 40,
     soc_ring_high: 60,
     kiosk_mode: false,
@@ -255,12 +259,17 @@ const DEFAULT_CONFIG = {
     modal_animation: 'scale',
     default_forecast_view: 'combined',
     show_battery_stack: false,
+    show_house_card: true,
+    show_sankey: true,
+    show_chart: true,
+    show_smart_loads: true,
+    show_insights: true,
   },
 };
 
 const SANKEY_THEMES = {
-  modern:  { solar: '#D4C850', battery: '#4ECDC4', grid_import: '#6B8FD4', home: '#9B7AB8', grid_export: '#7B8FD4', ev: '#E8705A', hp: '#E8A799', losses: '#444444' },
-  vibrant: { solar: '#c8b84a', battery: '#00d4b8', grid_import: '#6b7fd4', home: '#e8337f', grid_export: '#7c5cbf', ev: '#ff69b4', hp: '#e67e22', losses: '#444444' },
+  modern:  { solar: '#D4C850', battery: '#4ECDC4', grid_import: '#6B8FD4', home: '#9B7AB8', grid_export: '#7B8FD4', ev: '#E8705A', ev2: '#D4605A', hp: '#E8A799', losses: '#444444' },
+  vibrant: { solar: '#c8b84a', battery: '#00d4b8', grid_import: '#6b7fd4', home: '#e8337f', grid_export: '#7c5cbf', ev: '#ff69b4', ev2: '#e05580', hp: '#e67e22', losses: '#444444' },
 };
 
 class SigConfigStore {
@@ -301,6 +310,19 @@ class SigConfigStore {
               } catch(e) {}
             }
             this._config = cfg;
+            // Migrate profiles from localStorage to config store if not yet migrated
+            if ((!cfg.profiles || cfg.profiles.length === 0)) {
+              try {
+                const lsProfiles = localStorage.getItem('sigenergy_dashboard_profiles');
+                if (lsProfiles) {
+                  const parsed = JSON.parse(lsProfiles);
+                  if (Array.isArray(parsed) && parsed.some(p => p != null)) {
+                    cfg.profiles = parsed;
+                    this._saveToHA(cfg);
+                  }
+                }
+              } catch(e) {}
+            }
             // Also update localStorage cache
             try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...cfg, _version: 1, _saved: new Date().toISOString() })); } catch(e) {}
             this._notify();
@@ -2860,7 +2882,7 @@ class SigenergySettingsCard extends HTMLElement {
         </div>
       </div>
       ${(cfg.features?.num_ev_chargers || 1) >= 2 ? `
-      <div class="section" style="border:1px solid #2d3451;border-radius:12px;padding:12px;transition:all 0.3s;">
+      <div class="section" style="border:1px solid ${cfg.features?.show_ev2_in_sankey ? '#D4605A' : '#2d3451'};border-radius:12px;padding:12px;transition:all 0.3s;">
         <div class="section-title"><span>🔌 EV 2 / Charger</span></div>
         ${this._entityRow('Charger Power', 'ev2_charger_power', e)}
         ${this._entityRow('Charger State', 'ev2_charger_state', e)}
@@ -2868,6 +2890,30 @@ class SigenergySettingsCard extends HTMLElement {
         ${this._entityRow('EV Range', 'ev2_range', e)}
         ${this._entityRow('Time to Full', 'ev2_time_to_full', e)}
         <div style="font-size:9px;color:#666;padding:0 0 4px 4px;">EV 2 shows in the <b>EV Chargers</b> panel (Power / SoC / Range / State), and — with the <b>Two-Garage House Scene</b> enabled (Features tab) — also gets its own bay, car and charger on the house card.</div>
+        <div style="margin-top:8px;border-top:1px solid rgba(212,96,90,0.2);padding-top:8px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <div>
+              <div style="font-size:12px;font-weight:600;color:${cfg.features?.show_ev2_in_sankey ? '#D4605A' : '#8892a4'};">📊 Show EV 2 in Sankey Graph</div>
+              <div style="font-size:10px;color:#8892a4;margin-top:1px;">Add EV 2 consumption as a separate destination node in the energy flow chart</div>
+            </div>
+            <div class="switch ${cfg.features?.show_ev2_in_sankey ? 'on' : 'off'}" data-key="show_ev2_in_sankey_toggle" style="flex-shrink:0;margin-left:12px;"></div>
+          </div>
+          ${cfg.features?.show_ev2_in_sankey ? `
+            <div style="margin-top:8px;">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                <div style="flex:1;">${this._entityRow('EV 2 Energy Today', 'ev2_energy_today', e)}</div>
+              </div>
+              ${cfg.features?.ev2_energy_is_cumulative ? `
+                <div style="background:rgba(212,96,90,0.1);border:1px solid rgba(212,96,90,0.3);border-radius:8px;padding:8px;margin-bottom:6px;">
+                  <div style="font-size:10px;font-weight:600;color:#D4605A;">📊 Cumulative sensor detected</div>
+                  <div style="font-size:10px;color:#8892a4;margin-top:2px;">Source entity tracks lifetime total. ${e.ev2_energy_daily_meter ? 'Using daily utility meter: <b>' + e.ev2_energy_daily_meter + '</b>' : 'No daily meter configured yet.'}</div>
+                  ${e.ev2_energy_daily_meter ? this._entityRow('Daily Meter', 'ev2_energy_daily_meter', e) : ''}
+                </div>
+              ` : ''}
+              <div class="toggle-desc" style="color:#8892a4;font-size:10px;">Daily EV 2 charging energy (kWh). Set the daily energy sensor for EV 2 to show it in the Sankey.</div>
+            </div>
+          ` : ''}
+        </div>
       </div>
       ` : ''}
       <div class="section" style="border:1px solid ${cfg.features?.show_hp_in_sankey ? '#e67e22' : '#2d3451'};border-radius:12px;padding:12px;transition:all 0.3s;">
@@ -3172,6 +3218,22 @@ class SigenergySettingsCard extends HTMLElement {
         if (this._hass) {
           this._buildDashboard().then(ok => {
             if (ok) console.log('Dashboard rebuilt after toggling EV Sankey');
+            this._render();
+          }).catch(() => this._render());
+        } else { this._render(); }
+      });
+    }
+
+    // EV 2 in Sankey toggle handler
+    const ev2SankeyToggle = el.querySelector('[data-key="show_ev2_in_sankey_toggle"]');
+    if (ev2SankeyToggle) {
+      ev2SankeyToggle.addEventListener('click', () => {
+        const cfg2 = this._storeGet();
+        cfg2.features.show_ev2_in_sankey = !cfg2.features.show_ev2_in_sankey;
+        this._storeSave(cfg2);
+        if (this._hass) {
+          this._buildDashboard().then(ok => {
+            if (ok) console.log('Dashboard rebuilt after toggling EV 2 Sankey');
             this._render();
           }).catch(() => this._render());
         } else { this._render(); }
@@ -5969,6 +6031,7 @@ class SigenergySettingsCard extends HTMLElement {
 
   _buildApexSeries(e, features, cfg) {
     const series = [];
+    const chartMode = cfg.display?.chart_mode || 'detailed';
     // Unit-aware power transform: only divide by 1000 if sensor reports in W (not kW)
     // Also rejects energy units (Wh/kWh/MWh) to prevent cumulative counters from breaking the axis
     const powerTransform = "const u = (entity?.attributes?.unit_of_measurement || '').trim(); if (/wh$/i.test(u)) return null; return u === 'MW' ? x * 1000 : u === 'kW' ? x : x / 1000;";
@@ -5981,46 +6044,65 @@ class SigenergySettingsCard extends HTMLElement {
     // Actual solar
     if (entityOk(e.solar_power)) series.push({
       entity: e.solar_power,
-      name: 'Solar', color: '#F0A830', type: 'area', opacity: 0.25,
+      name: 'Solar', color: '#F0A830', type: 'area',
+      opacity: chartMode === 'simplified' ? 0.45 : 0.25,
       stroke_width: 2.5, extend_to: false, unit: ' kW',
       transform: powerTransform,
       group_by: { func: 'last', duration: '1min' },
       show: { in_header: true, legend_value: true },
       yaxis_id: 'power', float_precision: fp
     });
-    // Actual battery
-    if (entityOk(e.battery_power)) series.push({
-      entity: e.battery_power,
-      name: 'Battery', color: '#00d4b8', type: 'line',
-      stroke_width: 2.5, extend_to: false, unit: ' kW',
-      transform: powerTransform,
-      group_by: { func: 'last', duration: '1min' },
-      show: { in_header: true, legend_value: true },
-      yaxis_id: 'power', float_precision: fp
-    });
-    // Actual grid
+    // Actual battery (area fill in simplified mode for Sigenergy-style chart)
+    if (entityOk(e.battery_power)) {
+      const battSeries = {
+        entity: e.battery_power,
+        name: 'Battery', color: '#00d4b8',
+        type: chartMode === 'simplified' ? 'area' : 'line',
+        stroke_width: chartMode === 'simplified' ? 2 : 2.5,
+        extend_to: false, unit: ' kW',
+        transform: powerTransform,
+        group_by: { func: 'last', duration: '1min' },
+        show: { in_header: true, legend_value: true },
+        yaxis_id: 'power', float_precision: fp
+      };
+      if (chartMode === 'simplified') {
+        battSeries.opacity = 0.40;
+        // Sigenergy convention (positive=charging) needs invert so charge→below, discharge→above
+        if (features.battery_positive_charging !== false) battSeries.invert = true;
+      }
+      series.push(battSeries);
+    }
+    // Actual grid (area fill in simplified mode for Sigenergy-style chart)
     const gridPowerEntity = entityOk(e.grid_active_power) ? e.grid_active_power : (entityOk(e.grid_power) ? e.grid_power : '');
-    if (gridPowerEntity) series.push({
-      entity: gridPowerEntity,
-      name: 'Grid', color: '#E53935', type: 'line',
-      stroke_width: 2.5, extend_to: false, unit: ' kW',
-      transform: powerTransform,
-      group_by: { func: 'last', duration: '1min' },
-      show: { in_header: true, legend_value: true },
-      yaxis_id: 'power', float_precision: fp
-    });
+    if (gridPowerEntity) {
+      const gridSeries = {
+        entity: gridPowerEntity,
+        name: 'Grid', color: '#E53935',
+        type: chartMode === 'simplified' ? 'area' : 'line',
+        stroke_width: chartMode === 'simplified' ? 2 : 2.5,
+        extend_to: false, unit: ' kW',
+        transform: powerTransform,
+        group_by: { func: 'last', duration: '1min' },
+        show: { in_header: true, legend_value: true },
+        yaxis_id: 'power', float_precision: fp
+      };
+      if (chartMode === 'simplified') gridSeries.opacity = 0.30;
+      series.push(gridSeries);
+    }
     // Actual consumption (inverted)
     if (entityOk(e.load_power)) series.push({
       entity: e.load_power,
-      name: 'Consumption', color: '#AB47BC', type: 'area', opacity: 0.10,
-      stroke_width: 1.5, extend_to: false, unit: ' kW',
+      name: 'Consumption', color: '#AB47BC', type: 'area',
+      opacity: chartMode === 'simplified' ? 0.35 : 0.10,
+      stroke_width: chartMode === 'simplified' ? 2 : 1.5,
+      extend_to: false, unit: ' kW',
       transform: powerTransform,
       group_by: { func: 'last', duration: '1min' },
       show: { in_header: true, legend_value: true },
       yaxis_id: 'power', invert: true, float_precision: fp
     });
 
-    // EMHASS Forecast overlays (conditional)
+    // EMHASS Forecast overlays (conditional) — power forecasts shown in both modes, SOC only in detailed
     if (features.emhass && features.emhass_forecasts && entityOk(e.mpc_pv)) {
       // PV forecast
       series.push({
@@ -6064,8 +6146,8 @@ class SigenergySettingsCard extends HTMLElement {
           yaxis_id: 'power', invert: true, opacity: 0.6
         });
       }
-      // SOC forecast (secondary axis)
-      if (entityOk(e.mpc_soc)) {
+      // SOC forecast (secondary axis) — detailed only
+      if (chartMode === 'detailed' && entityOk(e.mpc_soc)) {
         series.push({
           entity: e.mpc_soc, name: 'SOC (plan)', color: '#81C784',
           type: 'line', curve: 'stepline', stroke_width: 1, stroke_dash: 5,
@@ -6075,8 +6157,8 @@ class SigenergySettingsCard extends HTMLElement {
           yaxis_id: 'soc', float_precision: 1
         });
       }
-      // Actual SOC
-      if (entityOk(e.battery_soc)) {
+      // Actual SOC — detailed only
+      if (chartMode === 'detailed' && entityOk(e.battery_soc)) {
         series.push({
           entity: e.battery_soc, name: 'SOC', color: '#2196F3',
           type: 'area', opacity: 0.2, stroke_width: 2.5,
@@ -6088,7 +6170,7 @@ class SigenergySettingsCard extends HTMLElement {
       }
     }
 
-    // HAEO Forecast overlays (conditional) — reads forecast attribute from HAEO sensors
+    // HAEO Forecast overlays (conditional) — power forecasts in both modes, SOC only in detailed
     const emsProvider = features.ems_provider || (features.emhass === true ? 'emhass' : 'none');
     if (emsProvider === 'haeo' && features.haeo_forecasts) {
       // HAEO Battery charge forecast
@@ -6146,8 +6228,8 @@ class SigenergySettingsCard extends HTMLElement {
           yaxis_id: 'power', invert: true, opacity: 0.6
         });
       }
-      // HAEO SOC forecast (secondary axis)
-      if (e.haeo_battery_soc) {
+      // HAEO SOC forecast (secondary axis) — detailed only
+      if (chartMode === 'detailed' && e.haeo_battery_soc) {
         series.push({
           entity: e.haeo_battery_soc, name: 'SOC (plan)', color: '#81C784',
           type: 'line', curve: 'stepline', stroke_width: 1, stroke_dash: 5,
@@ -6157,8 +6239,8 @@ class SigenergySettingsCard extends HTMLElement {
           yaxis_id: 'soc', float_precision: 1
         });
       }
-      // Actual SOC
-      if (e.battery_soc) {
+      // Actual SOC — detailed only
+      if (chartMode === 'detailed' && e.battery_soc) {
         series.push({
           entity: e.battery_soc, name: 'SOC', color: '#2196F3',
           type: 'area', opacity: 0.2, stroke_width: 2.5,
@@ -6179,7 +6261,7 @@ class SigenergySettingsCard extends HTMLElement {
     }
 
     // Price overlays — independent of EMS provider (works with EMHASS, HAEO, or standalone)
-    {
+    if (chartMode === 'detailed') {
       const priceUnit = ' ' + (cfg.pricing?.currency || '€') + '/kWh';
       if (e.buy_price) {
         // Universal data_generator: tries EMHASS attributes, then Amber/generic forecast, then returns empty for state-tracked fallback
@@ -6257,7 +6339,7 @@ return [];`;
       }
     }
 
-    // Solar forecast overlay (Solcast / forecast.solar) — separate from EMHASS
+    // Solar forecast overlay (Solcast / forecast.solar) — shown in both chart modes
     if (features.solar_forecast) {
       // Solcast detailed forecast from detailedForecast attribute
       const solcastEntity = e.solcast_today || e.solcast_remaining;
@@ -6363,6 +6445,7 @@ return forecast.map(function(d) {
 
   _buildYAxes(features, cfg) {
     const currency = cfg?.pricing?.currency || '€';
+    const chartMode = cfg?.display?.chart_mode || 'detailed';
     const yaxis = [
       {
         id: 'power', min: 'auto', max: 'auto', decimals: 1,
@@ -6373,6 +6456,7 @@ return forecast.map(function(d) {
         }
       }
     ];
+    if (chartMode === 'simplified') return yaxis;
     if (features.emhass && features.emhass_forecasts) {
       yaxis.push({
         id: 'soc', min: 0, max: 100, decimals: 0, show: false,
@@ -6476,7 +6560,10 @@ return forecast.map(function(d) {
       const hasForecasts = hasEmhassForecasts || hasHaeoForecasts;
       const hasSolarForecast = f.solar_forecast && (e.solcast_today || e.solcast_remaining || e.forecast_solar_today);
       const hasPriceOverlay = (e.buy_price || e.sell_price) && cfg.pricing?.show_price_overlay;
-      const showExtendedChart = hasForecasts || hasSolarForecast || hasPriceOverlay;
+      const _chartMode = cfg.display?.chart_mode || 'detailed';
+      const hasForecastData = hasForecasts || hasSolarForecast;
+      const showExtendedChart = _chartMode === 'detailed' && (hasForecastData || hasPriceOverlay);
+      const showSimplifiedForecasts = _chartMode === 'simplified' && hasForecastData;
 
       // Theme-aware card style — resolves 'auto' / 'dark' / 'light'
       const _resolvedTheme = this._resolveTheme();
@@ -6492,10 +6579,10 @@ return forecast.map(function(d) {
         : 'ha-card { background: var(--ha-card-background, linear-gradient(135deg, rgba(30,33,40,0.95) 0%, rgba(40,44,52,0.98) 100%)) !important; border: 1px solid var(--divider-color, rgba(92,156,230,0.12)) !important; border-radius: var(--ha-card-border-radius, 16px) !important; color: var(--primary-text-color, #fff); } .apexcharts-tooltip { background: rgba(26,31,46,0.95) !important; border: 1px solid rgba(0,212,184,0.3) !important; border-radius: 8px !important; color: #e0e0e0 !important; font-size: 12px !important; backdrop-filter: blur(8px) !important; box-shadow: 0 4px 16px rgba(0,0,0,0.4) !important; } .apexcharts-tooltip-title { background: rgba(0,212,184,0.12) !important; border-bottom: 1px solid rgba(0,212,184,0.2) !important; color: #fff !important; font-weight: 600 !important; } .apexcharts-toolbar { top: 4px !important; right: 4px !important; } .apexcharts-toolbar .apexcharts-zoom-icon svg, .apexcharts-toolbar .apexcharts-pan-icon svg, .apexcharts-toolbar .apexcharts-reset-icon svg, .apexcharts-toolbar .apexcharts-zoomin-icon svg, .apexcharts-toolbar .apexcharts-zoomout-icon svg, .apexcharts-toolbar .apexcharts-selection-icon svg { fill: rgba(255,255,255,0.5) !important; } .apexcharts-toolbar svg:hover { fill: #00d4b8 !important; } .apexcharts-legend-series { display: inline-flex !important; align-items: center !important; gap: 4px !important; } .apexcharts-legend-text:empty { display: none !important; } .apexcharts-legend-text:empty + .apexcharts-legend-marker, .apexcharts-legend-series:has(.apexcharts-legend-text:empty) { display: none !important; } @media (max-width: 600px) { .apexcharts-legend-text { font-size: 13px !important; } .apexcharts-legend-marker { width: 10px !important; height: 10px !important; } }';
 
       // Apply chart_range setting (today=midnight anchor, 24h=rolling window, 7d=rolling week)
-      // Extended chart (forecasts/prices) always overrides to 48h centred on now
+      // Extended/simplified-with-forecasts chart overrides to 48h centred on now
       const _chartRange = cfg.display?.chart_range || 'today';
       let _graphSpan, _spanConfig;
-      if (showExtendedChart) {
+      if (showExtendedChart || showSimplifiedForecasts) {
         _graphSpan = '48h';
         _spanConfig = { start: 'hour', offset: '-12h' };
       } else if (_chartRange === '7d') {
@@ -6517,13 +6604,15 @@ return forecast.map(function(d) {
         },
         header: {
           show: true, show_states: true, colorize_states: true,
-          title: hasEmhassForecasts ? 'Energy + EMHASS Forecast' : hasHaeoForecasts ? 'Energy + HAEO Forecast' : hasSolarForecast ? 'Energy + Solar Forecast' : 'Energy Overview'
+          title: _chartMode === 'simplified'
+            ? (hasForecastData ? 'Energy + Forecast' : 'Energy Overview')
+            : (hasEmhassForecasts ? 'Energy + EMHASS Forecast' : hasHaeoForecasts ? 'Energy + HAEO Forecast' : hasSolarForecast ? 'Energy + Solar Forecast' : 'Energy Overview')
         },
         graph_span: _graphSpan,
         update_interval: cfg.display?.chart_refresh_interval || '5min',
         apex_config: {
           chart: {
-            height: showExtendedChart ? '500px' : '350px',
+            height: showExtendedChart ? '500px' : showSimplifiedForecasts ? '400px' : '350px',
             animations: { enabled: true, easing: 'easeinout', speed: 400, dynamicAnimation: { enabled: true, speed: 200 } },
             stacked: false,
             zoom: { enabled: true, type: 'x', autoScaleYaxis: true },
@@ -6542,7 +6631,7 @@ return forecast.map(function(d) {
               style: { fontSize: '10px', colors: _resolvedTheme === 'light' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.5)' },
               rotateAlways: false, hideOverlappingLabels: true
             },
-            tickAmount: showExtendedChart ? 24 : 12,
+            tickAmount: (showExtendedChart || showSimplifiedForecasts) ? 24 : 12,
             axisBorder: { show: false },
             axisTicks: { show: true, color: _resolvedTheme === 'light' ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.1)' },
             crosshairs: { show: true, stroke: { color: '#00d4b8', width: 1, dashArray: 3 } }
@@ -6569,7 +6658,7 @@ return forecast.map(function(d) {
             padding: { left: 8, right: 8 }
           },
           annotations: {
-            yaxis: showExtendedChart ? [{ y: 0, yAxisIndex: 0, borderColor: _resolvedTheme === 'light' ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.2)', strokeDashArray: 3 }] : [],
+            yaxis: (showExtendedChart || showSimplifiedForecasts) ? [{ y: 0, yAxisIndex: 0, borderColor: _resolvedTheme === 'light' ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.2)', strokeDashArray: 3 }] : [],
             xaxis: _sunXAnnotations.length > 0 ? _sunXAnnotations : undefined
           }
         },
@@ -6721,11 +6810,44 @@ return forecast.map(function(d) {
         addStat(e.grid_export_today, 'Exported', 'mdi:transmission-tower-export', 'blue');
       }
 
-      // Build self-sufficiency card (unit-aware: normalise both to kWh before dividing)
-      const selfSuffCard = (e.solar_energy_today && e.load_energy_today) ? {
+      // Build self-sufficiency card: (1 - grid_import/load) * 100
+      // Falls back to min(solar/load, 100) when grid_import_today is not available
+      const _gridImportEntity = e.grid_import_today || (f.dual_tariff ? (e.grid_import_high_tariff || e.grid_import_low_tariff) : '');
+      const selfSuffCard = (e.load_energy_today && (_gridImportEntity || e.solar_energy_today)) ? {
+        type: 'custom:mushroom-template-card',
+        entity: e.load_energy_today,
+        primary: 'Self-Sufficiency',
+        secondary: _gridImportEntity
+          ? "{% set lu = (state_attr('" + e.load_energy_today + "', 'unit_of_measurement') or 'kWh') | string %}" +
+            "{% set lr = states('" + e.load_energy_today + "') | float(0) %}" +
+            "{% set load = lr * 1000 if lu == 'MWh' else lr / 1000 if lu == 'Wh' else lr %}" +
+            "{% set gu = (state_attr('" + _gridImportEntity + "', 'unit_of_measurement') or 'kWh') | string %}" +
+            "{% set gr = states('" + _gridImportEntity + "') | float(0) %}" +
+            "{% set grid = gr * 1000 if gu == 'MWh' else gr / 1000 if gu == 'Wh' else gr %}" +
+            (f.dual_tariff && e.grid_import_high_tariff && e.grid_import_low_tariff && _gridImportEntity !== e.grid_import_today
+              ? "{% set g2u = (state_attr('" + (e.grid_import_high_tariff === _gridImportEntity ? e.grid_import_low_tariff : e.grid_import_high_tariff) + "', 'unit_of_measurement') or 'kWh') | string %}" +
+                "{% set g2r = states('" + (e.grid_import_high_tariff === _gridImportEntity ? e.grid_import_low_tariff : e.grid_import_high_tariff) + "') | float(0) %}" +
+                "{% set grid = grid + (g2r * 1000 if g2u == 'MWh' else g2r / 1000 if g2u == 'Wh' else g2r) %}"
+              : '') +
+            "{{ [((1 - grid / load) * 100) | round(1), 0] | max if load > 0 else 0 }}%"
+          : "{% set su = (state_attr('" + e.solar_energy_today + "', 'unit_of_measurement') or 'kWh') | string %}" +
+            "{% set sr = states('" + e.solar_energy_today + "') | float(0) %}" +
+            "{% set solar = sr * 1000 if su == 'MWh' else sr / 1000 if su == 'Wh' else sr %}" +
+            "{% set lu = (state_attr('" + e.load_energy_today + "', 'unit_of_measurement') or 'kWh') | string %}" +
+            "{% set lr = states('" + e.load_energy_today + "') | float(0) %}" +
+            "{% set load = lr * 1000 if lu == 'MWh' else lr / 1000 if lu == 'Wh' else lr %}" +
+            "{{ ([((solar / load) * 100) | round(1), 100.0] | min) if load > 0 else 0 }}%",
+        icon: 'mdi:check-decagram', icon_color: 'green',
+        card_mod: { style: _resolvedTheme === 'light'
+          ? 'ha-card { background: linear-gradient(135deg, rgba(0,212,184,0.08), rgba(255,255,255,0.9)) !important; backdrop-filter: blur(14px) !important; -webkit-backdrop-filter: blur(14px) !important; border: 1px solid rgba(0,212,184,0.2) !important; border-radius: 16px !important; color: var(--primary-text-color, #1a1f2e) !important; box-shadow: 0 2px 12px rgba(0,212,184,0.1) !important; } mushroom-state-info { --card-primary-font-size: 14px !important; --card-secondary-font-size: 18px !important; --card-secondary-color: #00b89c !important; }'
+          : 'ha-card { background: linear-gradient(135deg, rgba(0,212,184,0.12), rgba(45,52,81,0.5)) !important; backdrop-filter: blur(14px) !important; -webkit-backdrop-filter: blur(14px) !important; border: 1px solid rgba(0,212,184,0.2) !important; border-radius: 16px !important; box-shadow: 0 4px 16px rgba(0,212,184,0.1), inset 0 1px 0 rgba(0,212,184,0.1) !important; } mushroom-state-info { --card-primary-font-size: 14px !important; --card-secondary-font-size: 18px !important; --card-secondary-color: #00d4b8 !important; }' }
+      } : null;
+
+      // Build Solar Coverage card (solar production vs consumption ratio)
+      const solarCoverageCard = (e.solar_energy_today && e.load_energy_today) ? {
         type: 'custom:mushroom-template-card',
         entity: e.solar_energy_today,
-        primary: 'Self-Sufficiency',
+        primary: 'Solar Coverage',
         secondary: "{% set su = (state_attr('" + e.solar_energy_today + "', 'unit_of_measurement') or 'kWh') | string %}" +
           "{% set sr = states('" + e.solar_energy_today + "') | float(0) %}" +
           "{% set solar = sr * 1000 if su == 'MWh' else sr / 1000 if su == 'Wh' else sr %}" +
@@ -6733,10 +6855,10 @@ return forecast.map(function(d) {
           "{% set lr = states('" + e.load_energy_today + "') | float(0) %}" +
           "{% set load = lr * 1000 if lu == 'MWh' else lr / 1000 if lu == 'Wh' else lr %}" +
           "{{ ((solar / load) * 100) | round(1) if load > 0 else 0 }}%",
-        icon: 'mdi:check-decagram', icon_color: 'green',
+        icon: 'mdi:solar-power', icon_color: 'amber',
         card_mod: { style: _resolvedTheme === 'light'
-          ? 'ha-card { background: linear-gradient(135deg, rgba(0,212,184,0.08), rgba(255,255,255,0.9)) !important; backdrop-filter: blur(14px) !important; -webkit-backdrop-filter: blur(14px) !important; border: 1px solid rgba(0,212,184,0.2) !important; border-radius: 16px !important; color: var(--primary-text-color, #1a1f2e) !important; box-shadow: 0 2px 12px rgba(0,212,184,0.1) !important; } mushroom-state-info { --card-primary-font-size: 14px !important; --card-secondary-font-size: 18px !important; --card-secondary-color: #00b89c !important; }'
-          : 'ha-card { background: linear-gradient(135deg, rgba(0,212,184,0.12), rgba(45,52,81,0.5)) !important; backdrop-filter: blur(14px) !important; -webkit-backdrop-filter: blur(14px) !important; border: 1px solid rgba(0,212,184,0.2) !important; border-radius: 16px !important; box-shadow: 0 4px 16px rgba(0,212,184,0.1), inset 0 1px 0 rgba(0,212,184,0.1) !important; } mushroom-state-info { --card-primary-font-size: 14px !important; --card-secondary-font-size: 18px !important; --card-secondary-color: #00d4b8 !important; }' }
+          ? 'ha-card { background: linear-gradient(135deg, rgba(240,168,48,0.08), rgba(255,255,255,0.9)) !important; backdrop-filter: blur(14px) !important; -webkit-backdrop-filter: blur(14px) !important; border: 1px solid rgba(240,168,48,0.2) !important; border-radius: 16px !important; color: var(--primary-text-color, #1a1f2e) !important; box-shadow: 0 2px 12px rgba(240,168,48,0.1) !important; } mushroom-state-info { --card-primary-font-size: 14px !important; --card-secondary-font-size: 18px !important; --card-secondary-color: #d49530 !important; }'
+          : 'ha-card { background: linear-gradient(135deg, rgba(240,168,48,0.12), rgba(45,52,81,0.5)) !important; backdrop-filter: blur(14px) !important; -webkit-backdrop-filter: blur(14px) !important; border: 1px solid rgba(240,168,48,0.2) !important; border-radius: 16px !important; box-shadow: 0 4px 16px rgba(240,168,48,0.1), inset 0 1px 0 rgba(240,168,48,0.1) !important; } mushroom-state-info { --card-primary-font-size: 14px !important; --card-secondary-font-size: 18px !important; --card-secondary-color: #F0A830 !important; }' }
       } : null;
 
       // Build Solcast forecast card (conditional)
@@ -6763,34 +6885,46 @@ return forecast.map(function(d) {
       const mainLayout = overviewView.cards[0];
       if (!mainLayout || mainLayout.type !== 'custom:layout-card') throw new Error('Layout card not found');
 
-      // Responsive grid: keep the two primary overview cards (house + energy flow)
-      // in a balanced two-column row. The battery card follows below instead of
-      // reserving a mostly empty third desktop column.
-      // iPad portrait (768-834px) stays single column to avoid cramped layout
+      // Dynamic grid: column count adapts to which top-row sections are visible
+      const _showHouse = cfg.display?.show_house_card !== false;
+      const _showSankey = cfg.display?.show_sankey !== false;
+      const _showBatStack = !!(cfg.display?.show_battery_stack);
+      const _topRowCount = (_showHouse ? 1 : 0) + (_showSankey ? 1 : 0) + (_showBatStack ? 1 : 0);
+
       if (mainLayout.layout) {
         mainLayout.layout['grid-template-columns'] = '1fr';
         mainLayout.layout['grid-gap'] = '16px';
         mainLayout.layout['align-items'] = 'start';
         if (mainLayout.layout.mediaquery) {
-          mainLayout.layout.mediaquery['(min-width: 1025px)'] = {
-            'grid-template-columns': 'minmax(420px, 0.95fr) minmax(520px, 1.25fr)',
-            'grid-gap': '16px',
-            'align-items': 'start'
-          };
-          mainLayout.layout.mediaquery['(min-width: 1201px)'] = {
-            'grid-template-columns': 'minmax(460px, 0.95fr) minmax(620px, 1.35fr)',
-            'grid-template-rows': 'auto',
-            'grid-gap': '16px',
-            'align-items': 'start'
-          };
-          mainLayout.layout.mediaquery['(min-width: 1800px)'] = {
-            'grid-template-columns': 'minmax(560px, 0.95fr) minmax(780px, 1.35fr)',
-            'grid-template-rows': 'auto',
-            'max-width': '2200px',
-            'margin': '0 auto',
-            'grid-gap': '18px',
-            'align-items': 'start'
-          };
+          if (_topRowCount >= 2) {
+            mainLayout.layout.mediaquery['(min-width: 1025px)'] = {
+              'grid-template-columns': 'minmax(420px, 0.95fr) minmax(520px, 1.25fr)',
+              'grid-gap': '16px',
+              'align-items': 'start'
+            };
+            mainLayout.layout.mediaquery['(min-width: 1201px)'] = {
+              'grid-template-columns': 'minmax(460px, 0.95fr) minmax(620px, 1.35fr)',
+              'grid-template-rows': 'auto',
+              'grid-gap': '16px',
+              'align-items': 'start'
+            };
+            mainLayout.layout.mediaquery['(min-width: 1800px)'] = {
+              'grid-template-columns': 'minmax(560px, 0.95fr) minmax(780px, 1.35fr)',
+              'grid-template-rows': 'auto',
+              'max-width': '2200px',
+              'margin': '0 auto',
+              'grid-gap': '18px',
+              'align-items': 'start'
+            };
+          } else {
+            mainLayout.layout.mediaquery['(min-width: 1025px)'] = {
+              'grid-template-columns': '1fr',
+              'grid-gap': '16px',
+              'align-items': 'start'
+            };
+            delete mainLayout.layout.mediaquery['(min-width: 1201px)'];
+            delete mainLayout.layout.mediaquery['(min-width: 1800px)'];
+          }
         }
       }
 
@@ -6798,9 +6932,10 @@ return forecast.map(function(d) {
       const newCards = [];
 
       // Card 0: House + optional EMS status
-      // Get existing house card or create default, sync entities from store, and add min-height
-      // mainLayout.cards[0] may be a layout-card (after rebuild) wrapping [houseVerticalStack, batteryCard]
-      // Or it may be the original vertical-stack. Find the sigenergy-house-card wherever it is.
+      // Build from fresh default for idempotent hide→re-enable, but preserve
+      // cable path and SOC ring customizations from the existing Lovelace card
+      // (these are saved by the Cable Path Editor directly to the card config,
+      // not the config store).
       const _findHouseCard = (cards) => {
         if (!cards) return null;
         for (const c of cards) {
@@ -6809,7 +6944,31 @@ return forecast.map(function(d) {
         }
         return null;
       };
-      const houseCardOrig = _findHouseCard(mainLayout.cards) || { type: 'custom:sigenergy-house-card' };
+      const _oldHouseCard = _findHouseCard(mainLayout.cards);
+      const houseCardOrig = { type: 'custom:sigenergy-house-card' };
+      // Carry forward Cable Path Editor customizations from Lovelace card or config store fallback
+      const _oldPaths = _oldHouseCard?.paths || cfg.house_card_paths;
+      const _oldRing = _oldHouseCard?.soc_ring_cx != null ? _oldHouseCard : cfg.house_card_ring;
+      if (_oldPaths) houseCardOrig.paths = _oldPaths;
+      if (_oldRing?.soc_ring_cx != null) {
+        houseCardOrig.soc_ring_cx = _oldRing.soc_ring_cx;
+        houseCardOrig.soc_ring_cy = _oldRing.soc_ring_cy;
+        houseCardOrig.soc_ring_r = _oldRing.soc_ring_r;
+        if (_oldRing.soc_ring_skew_x != null) houseCardOrig.soc_ring_skew_x = _oldRing.soc_ring_skew_x;
+        if (_oldRing.soc_ring_skew_y != null) houseCardOrig.soc_ring_skew_y = _oldRing.soc_ring_skew_y;
+      }
+      // Back up path/ring data to config store so it survives when house card is hidden
+      if (_oldHouseCard?.paths && !cfg.house_card_paths) {
+        cfg.house_card_paths = _oldHouseCard.paths;
+        if (_oldHouseCard.soc_ring_cx != null) {
+          cfg.house_card_ring = {
+            soc_ring_cx: _oldHouseCard.soc_ring_cx, soc_ring_cy: _oldHouseCard.soc_ring_cy,
+            soc_ring_r: _oldHouseCard.soc_ring_r,
+            soc_ring_skew_x: _oldHouseCard.soc_ring_skew_x, soc_ring_skew_y: _oldHouseCard.soc_ring_skew_y,
+          };
+        }
+        store.save(cfg);
+      }
       // Auto-fill battery_capacity if empty and a capacity entity exists (for runtime estimation)
       if (!e.battery_capacity && !e.battery_capacity_kwh && this._hass) {
         const capKeys = Object.keys(this._hass.states).filter(k => {
@@ -6915,6 +7074,12 @@ return forecast.map(function(d) {
         houseCardOrig.ev_charger_label = evChargerLabel;
       } else {
         delete houseCardOrig.ev_charger_label;
+      }
+      const ev2ChargerLabel = cfg.display?.ev2_charger_label;
+      if (ev2ChargerLabel) {
+        houseCardOrig.ev2_charger_label = ev2ChargerLabel;
+      } else {
+        delete houseCardOrig.ev2_charger_label;
       }
       ['solar_label', 'home_label', 'grid_label'].forEach(k => {
         const v = cfg.display?.[k];
@@ -7093,7 +7258,11 @@ return forecast.map(function(d) {
       if (forecastModalCard) houseStack.push(forecastModalCard);
 
       if (solcastCard) houseStack.push(solcastCard);
-      newCards.push({ type: 'vertical-stack', cards: houseStack, view_layout: { 'grid-column': '1' } });
+      let _topCol = 0;
+      if (_showHouse) {
+        _topCol++;
+        newCards.push({ type: 'vertical-stack', cards: houseStack, view_layout: { 'grid-column': String(_topCol) } });
+      }
 
       // Card 1: Sankey (rebuild from store entities)
       // Date navigation — HA's built-in energy-date-selection card for historical date picking
@@ -7112,6 +7281,7 @@ return forecast.map(function(d) {
       const sankeyOld = _vsCards.find(c => c.type === 'custom:sankey-chart') || {};
       // Resolve EV/HP entity IDs — use utility meter if cumulative, otherwise direct entity
       const evSankeyEntity = (f.ev_energy_is_cumulative && e.ev_energy_daily_meter) ? e.ev_energy_daily_meter : e.ev_energy_today;
+      const ev2SankeyEntity = (f.ev2_energy_is_cumulative && e.ev2_energy_daily_meter) ? e.ev2_energy_daily_meter : e.ev2_energy_today;
       const hpSankeyEntity = (f.hp_energy_is_cumulative && e.hp_energy_daily_meter) ? e.hp_energy_daily_meter : e.heat_pump_energy_today;
 
       // Build Sankey destinations list (Load is always present, EV/HP are optional)
@@ -7142,7 +7312,9 @@ return forecast.map(function(d) {
 
       // EV/HP added last — if ha-sankey-chart hides them (below min_state),
       // the click target mismatch only affects the bottom items, not main destinations.
-      if (f.show_ev_in_sankey && evSankeyEntity) sankeyDest.push({ entity_id: evSankeyEntity, name: 'EV', color: '#E8705A' });
+      const _ev1Label = (f.show_ev2_in_sankey && ev2SankeyEntity) ? (cfg.display?.ev_charger_label || 'EV 1') : 'EV';
+      if (f.show_ev_in_sankey && evSankeyEntity) sankeyDest.push({ entity_id: evSankeyEntity, name: _ev1Label, color: '#E8705A' });
+      if (f.show_ev2_in_sankey && ev2SankeyEntity) sankeyDest.push({ entity_id: ev2SankeyEntity, name: cfg.display?.ev2_charger_label || 'EV 2', color: '#D4605A' });
       if (f.show_hp_in_sankey && hpSankeyEntity) sankeyDest.push({ entity_id: hpSankeyEntity, name: 'HP', color: '#E8A799' });
 
       // Build source children arrays — sources can flow to all destinations
@@ -7154,6 +7326,7 @@ return forecast.map(function(d) {
       // Small consumers as simple entity_ids (for destination section)
       const _smallConsumerIds = [];
       if (f.show_ev_in_sankey && evSankeyEntity) _smallConsumerIds.push(evSankeyEntity);
+      if (f.show_ev2_in_sankey && ev2SankeyEntity) _smallConsumerIds.push(ev2SankeyEntity);
       if (f.show_hp_in_sankey && hpSankeyEntity) _smallConsumerIds.push(hpSankeyEntity);
 
       // Small consumers with connection_entity_id for proportional source allocation
@@ -7170,6 +7343,11 @@ return forecast.map(function(d) {
         _smallConsForSolar.push({ entity_id: evSankeyEntity, connection_entity_id: '_conn_solar_to_ev' });
         _smallConsForBat.push({ entity_id: evSankeyEntity, connection_entity_id: '_conn_bat_to_ev' });
         _smallConsForGrid.push({ entity_id: evSankeyEntity, connection_entity_id: '_conn_grid_to_ev' });
+      }
+      if (f.show_ev2_in_sankey && ev2SankeyEntity) {
+        _smallConsForSolar.push({ entity_id: ev2SankeyEntity, connection_entity_id: '_conn_solar_to_ev2' });
+        _smallConsForBat.push({ entity_id: ev2SankeyEntity, connection_entity_id: '_conn_bat_to_ev2' });
+        _smallConsForGrid.push({ entity_id: ev2SankeyEntity, connection_entity_id: '_conn_grid_to_ev2' });
       }
 
       // remaining_parent_state virtual child — only used when losses toggle is ON.
@@ -7244,8 +7422,13 @@ return forecast.map(function(d) {
         if (_gridExportAdd) _geNode.add_entities = _gridExportAdd;
         _sankeyNodes.push(_geNode);
       }
+      const _ev1Name = (f.show_ev2_in_sankey && ev2SankeyEntity) ? (cfg.display?.ev_charger_label || 'EV 1') : 'EV';
       if (f.show_ev_in_sankey && evSankeyEntity) _sankeyNodes.push({
-        id: 'ev', name: 'EV', color: _sTheme.ev, entity_id: evSankeyEntity, type: 'dest',
+        id: 'ev', name: _ev1Name, color: _sTheme.ev, entity_id: evSankeyEntity, type: 'dest',
+        children: [], parents: [e.solar_energy_today, e.battery_discharge_today, _gridImportId].filter(Boolean)
+      });
+      if (f.show_ev2_in_sankey && ev2SankeyEntity) _sankeyNodes.push({
+        id: 'ev2', name: cfg.display?.ev2_charger_label || 'EV 2', color: _sTheme.ev2, entity_id: ev2SankeyEntity, type: 'dest',
         children: [], parents: [e.solar_energy_today, e.battery_discharge_today, _gridImportId].filter(Boolean)
       });
       if (f.show_hp_in_sankey && hpSankeyEntity) _sankeyNodes.push({
@@ -7309,8 +7492,13 @@ return forecast.map(function(d) {
         if (_gridExportAdd) _gePanelNode.add_entities = _gridExportAdd;
         _panelNodes.push(_gePanelNode);
       }
+      const _ev1PanelName = (f.show_ev2_in_sankey && ev2SankeyEntity) ? (cfg.display?.ev_charger_label || 'EV 1 Charger') : 'EV Charger';
       if (f.show_ev_in_sankey && evSankeyEntity) _panelNodes.push({
-        id: 'ev', name: 'EV Charger', color: _sTheme.ev, entity_id: evSankeyEntity, type: 'dest',
+        id: 'ev', name: _ev1PanelName, color: _sTheme.ev, entity_id: evSankeyEntity, type: 'dest',
+        children: [], parents: [e.solar_energy_today, e.battery_discharge_today, _gridImportId].filter(Boolean)
+      });
+      if (f.show_ev2_in_sankey && ev2SankeyEntity) _panelNodes.push({
+        id: 'ev2', name: (cfg.display?.ev2_charger_label || 'EV 2') + ' Charger', color: _sTheme.ev2, entity_id: ev2SankeyEntity, type: 'dest',
         children: [], parents: [e.solar_energy_today, e.battery_discharge_today, _gridImportId].filter(Boolean)
       });
       if (f.show_hp_in_sankey && hpSankeyEntity) _panelNodes.push({
@@ -7326,7 +7514,10 @@ return forecast.map(function(d) {
         min_flow: sankeyChart.min_flow,
       };
 
-      newCards.push({ type: 'vertical-stack', cards: [sankeyHeader, sankeyChart, sankeyInfoPanel], view_layout: { 'grid-column': '2' } });
+      if (_showSankey) {
+        _topCol++;
+        newCards.push({ type: 'vertical-stack', cards: [sankeyHeader, sankeyChart, sankeyInfoPanel], view_layout: { 'grid-column': String(_topCol) } });
+      }
 
       // Optional battery-stack column (Settings → Display toggle). Pushed as a DIRECT
       // #root child (3rd card) — NOT a nested grid — so it inherits the same responsive
@@ -7334,7 +7525,8 @@ return forecast.map(function(d) {
       // on mobile/Safari. Column placement (3-across ≥1500px, stacked below) is driven
       // by the config-aware injected RESPONSIVE_CSS (battery variant). A transparent
       // spacer aligns its top with the sankey chart on desktop and collapses <1500px.
-      if (cfg.display && cfg.display.show_battery_stack) {
+      if (_showBatStack) {
+        _topCol++;
         const _batterySpacer = {
           type: 'markdown',
           content: '&nbsp;',
@@ -7343,7 +7535,7 @@ return forecast.map(function(d) {
         newCards.push({
           type: 'vertical-stack',
           cards: [ _batterySpacer, { type: 'custom:sigenergy-device-card', battery_packs: (f.battery_packs || 2) } ],
-          view_layout: { 'grid-column': '3' }
+          view_layout: { 'grid-column': String(_topCol) }
         });
       }
 
@@ -7357,19 +7549,27 @@ return forecast.map(function(d) {
       });
 
       // Card 2: Apex chart + self-sufficiency (full width)
-      newCards.push({ ..._sectionDivider('FORECAST', '📈'), view_layout: { 'grid-column': '1 / -1' } });
-      const chartStack = [];
-      if (f.expandable_forecast) chartStack.push({ type: 'custom:sigenergy-forecast-modal-button' });
-      chartStack.push(apexChart);
-      if (selfSuffCard) chartStack.push(selfSuffCard);
-      newCards.push({ type: 'vertical-stack', cards: chartStack, view_layout: { 'grid-column': '1 / -1' } });
+      if (cfg.display?.show_chart !== false) {
+        newCards.push({ ..._sectionDivider('FORECAST', '📈'), view_layout: { 'grid-column': '1 / -1' } });
+        const chartStack = [];
+        if (f.expandable_forecast) chartStack.push({ type: 'custom:sigenergy-forecast-modal-button' });
+        chartStack.push(apexChart);
+        if (selfSuffCard && solarCoverageCard) {
+          chartStack.push({ type: 'horizontal-stack', cards: [selfSuffCard, solarCoverageCard] });
+        } else if (selfSuffCard) {
+          chartStack.push(selfSuffCard);
+        } else if (solarCoverageCard) {
+          chartStack.push(solarCoverageCard);
+        }
+        newCards.push({ type: 'vertical-stack', cards: chartStack, view_layout: { 'grid-column': '1 / -1' } });
+      }
 
       // Card 6+7: Smart Loads + System Insights side by side in a full-width container
-      // Both get full row (1 / -1) so they sit in a proper horizontal layout
-      const insightsCard = { type: 'custom:sigenergy-insights-card' };
-      if (f.smart_loads && cfg.smart_loads?.length > 0) {
-        // Wrap smart loads + insights in a 2-column horizontal layout spanning full width
+      const _showSmartLoads = cfg.display?.show_smart_loads !== false && f.smart_loads && cfg.smart_loads?.length > 0;
+      const _showInsights = cfg.display?.show_insights !== false;
+      if (_showSmartLoads && _showInsights) {
         const smartLoadsCard = { type: 'custom:sigenergy-smart-load-card' };
+        const insightsCard = { type: 'custom:sigenergy-insights-card' };
         newCards.push({
           type: 'custom:layout-card',
           layout_type: 'custom:grid-layout',
@@ -7384,9 +7584,10 @@ return forecast.map(function(d) {
           cards: [smartLoadsCard, insightsCard],
           view_layout: { 'grid-column': '1 / -1' }
         });
-      } else {
-        // Only insights — span 2 of the 3 columns so it gets proper width
-        newCards.push({ ...insightsCard, view_layout: { 'grid-column': '1 / 3' } });
+      } else if (_showSmartLoads) {
+        newCards.push({ type: 'custom:sigenergy-smart-load-card', view_layout: { 'grid-column': '1 / -1' } });
+      } else if (_showInsights) {
+        newCards.push({ type: 'custom:sigenergy-insights-card', view_layout: { 'grid-column': '1 / 3' } });
       }
 
       // Preserve persistent config on the layout card — use current store state
@@ -7461,6 +7662,15 @@ return forecast.map(function(d) {
           </div>
           <div class="switch ${d.show_battery_stack ? 'on' : 'off'}" data-key="show_battery_stack_toggle" style="flex-shrink:0;margin-left:12px;"></div>
         </div>
+      </div>
+      <div class="section">
+        <div class="section-title">📋 Dashboard Sections</div>
+        <div style="font-size:10px;color:#666;margin-bottom:8px;">Show or hide major sections on the overview dashboard.</div>
+        ${this._toggleHtml('House Card', 'Show the animated house energy flow card', 'show_house_card', d.show_house_card !== false, 'display')}
+        ${this._toggleHtml('Energy Flow (Sankey)', 'Show the Sankey energy flow diagram', 'show_sankey', d.show_sankey !== false, 'display')}
+        ${this._toggleHtml('Energy Chart', 'Show the ApexCharts time-series power chart', 'show_chart', d.show_chart !== false, 'display')}
+        ${this._toggleHtml('Smart Loads', 'Show the smart loads grid (requires Smart Loads enabled in Features)', 'show_smart_loads', d.show_smart_loads !== false, 'display')}
+        ${this._toggleHtml('System Insights', 'Show the system insights cards (Battery Health, Capacity, etc.)', 'show_insights', d.show_insights !== false, 'display')}
       </div>
       <div class="section">
         <div class="section-title">Formatting</div>
@@ -7562,13 +7772,21 @@ return forecast.map(function(d) {
       <div class="section">
         <div class="section-title">Charts</div>
         <div class="row">
+          <span class="row-label">Chart Mode</span>
+          <select class="row-input" data-key="chart_mode">
+            <option value="detailed" ${(d.chart_mode||'detailed')==='detailed'?'selected':''}>Detailed (all series + SOC + prices)</option>
+            <option value="simplified" ${d.chart_mode==='simplified'?'selected':''}>Simplified (power + forecasts, no SOC/prices)</option>
+          </select>
+          <span class="row-state">Simplified hides forecast overlays, prices, and SoC for a cleaner view</span>
+        </div>
+        <div class="row">
           <span class="row-label">Default Range</span>
           <select class="row-input" data-key="chart_range">
             <option value="today" ${d.chart_range==='today'?'selected':''}>Today (midnight anchor)</option>
             <option value="24h" ${d.chart_range==='24h'?'selected':''}>Last 24h (rolling)</option>
             <option value="7d" ${d.chart_range==='7d'?'selected':''}>Last 7 Days (rolling)</option>
           </select>
-          <span class="row-state">Overridden to 48h when forecasts/prices are enabled</span>
+          <span class="row-state">Overridden to 48h when forecasts/prices are enabled (detailed mode)</span>
         </div>
         <div class="row">
           <span class="row-label">Refresh Interval</span>
@@ -7607,7 +7825,7 @@ return forecast.map(function(d) {
         <div class="section-title">💾 Configuration Profiles</div>
         <div style="font-size:10px;color:#666;margin-bottom:8px;">Save up to 3 named snapshots of your entire configuration (entities, features, pricing, display).</div>
         ${(() => {
-          const profiles = JSON.parse(localStorage.getItem('sigenergy_dashboard_profiles') || '[]');
+          const profiles = cfg.profiles || [];
           return [0,1,2].map(i => {
             const p = profiles[i] || null;
             // Use draft name if user has typed something since last render (survives re-renders)
@@ -7672,8 +7890,24 @@ return forecast.map(function(d) {
       });
     }
 
+    // Dashboard section visibility toggles
+    const _sectionKeys = ['show_house_card', 'show_sankey', 'show_chart', 'show_smart_loads', 'show_insights'];
+    _sectionKeys.forEach(key => {
+      const sw = el.querySelector('.switch[data-key="' + key + '"]');
+      if (sw) {
+        sw.addEventListener('click', async () => {
+          const cfg2 = this._storeGet();
+          cfg2.display[key] = !(cfg2.display[key] !== false);
+          this._storeSave(cfg2);
+          if (this._hass) await this._buildDashboard();
+          if (window._sigenergyReinjectResponsive) window._sigenergyReinjectResponsive();
+          this._render();
+        });
+      }
+    });
+
     // Input/select changes
-    const STRING_SELECTS = ['sankey_color_theme', 'chart_range', 'chart_refresh_interval', 'modal_animation', 'default_forecast_view', 'hp_image_style'];
+    const STRING_SELECTS = ['sankey_color_theme', 'chart_range', 'chart_refresh_interval', 'chart_mode', 'modal_animation', 'default_forecast_view', 'hp_image_style'];
     el.querySelectorAll('.row-input:not(.profile-name)').forEach(input => {
       input.addEventListener('change', () => {
         const cfg2 = this._storeGet();
@@ -7705,6 +7939,9 @@ return forecast.map(function(d) {
         if (key === 'battery_deadband_w') {
           this._syncBatteryDeadbandToDashboard(val);
         }
+        if (key === 'chart_mode' || key === 'chart_range') {
+          this._buildDashboard();
+        }
       });
     });
 
@@ -7712,18 +7949,16 @@ return forecast.map(function(d) {
     el.querySelectorAll('.profile-save-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const slot = parseInt(btn.dataset.slot);
-        // Prefer draft name (captured on input event, survives re-renders) then DOM fallback
         const nameInput = (this.shadowRoot || el).querySelector('.profile-name[data-slot="' + slot + '"]');
         const typedName = (this._draftProfileNames[slot] != null ? this._draftProfileNames[slot] : nameInput?.value || '').trim();
-        const profiles = JSON.parse(localStorage.getItem('sigenergy_dashboard_profiles') || '[]');
         const currentCfg = this._storeGet();
-        profiles[slot] = {
+        if (!currentCfg.profiles) currentCfg.profiles = [];
+        currentCfg.profiles[slot] = {
           name: typedName || 'Profile ' + (slot + 1),
           savedAt: new Date().toISOString(),
           config: { entities: { ...currentCfg.entities }, features: { ...currentCfg.features }, pricing: { ...currentCfg.pricing }, display: { ...currentCfg.display } }
         };
-        localStorage.setItem('sigenergy_dashboard_profiles', JSON.stringify(profiles));
-        // Clear draft after successful save; the saved name will be reloaded on next render
+        this._storeSave(currentCfg);
         delete this._draftProfileNames[slot];
         btn.textContent = '✅'; setTimeout(() => { this._render(); }, 1000);
       });
@@ -7731,10 +7966,9 @@ return forecast.map(function(d) {
     el.querySelectorAll('.profile-load-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const slot = parseInt(btn.dataset.slot);
-        const profiles = JSON.parse(localStorage.getItem('sigenergy_dashboard_profiles') || '[]');
-        const prof = profiles[slot];
-        if (!prof?.config) return;
         const cfg2 = this._storeGet();
+        const prof = (cfg2.profiles || [])[slot];
+        if (!prof?.config) return;
         if (prof.config.entities) cfg2.entities = { ...cfg2.entities, ...prof.config.entities };
         if (prof.config.features) cfg2.features = { ...cfg2.features, ...prof.config.features };
         if (prof.config.pricing) cfg2.pricing = { ...cfg2.pricing, ...prof.config.pricing };
@@ -7747,9 +7981,10 @@ return forecast.map(function(d) {
       btn.addEventListener('click', () => {
         const slot = parseInt(btn.dataset.slot);
         delete this._draftProfileNames[slot];
-        const profiles = JSON.parse(localStorage.getItem('sigenergy_dashboard_profiles') || '[]');
-        profiles[slot] = null;
-        localStorage.setItem('sigenergy_dashboard_profiles', JSON.stringify(profiles));
+        const cfg2 = this._storeGet();
+        if (!cfg2.profiles) cfg2.profiles = [];
+        cfg2.profiles[slot] = null;
+        this._storeSave(cfg2);
         this._render();
       });
     });
@@ -9145,6 +9380,7 @@ class SigenergySankeyPanel extends HTMLElement {
     const gridI = meta.find(n => n.id === 'grid_i');
     const gridE = meta.find(n => n.id === 'grid_e');
     const ev = meta.find(n => n.id === 'ev');
+    const ev2 = meta.find(n => n.id === 'ev2');
     const hp = meta.find(n => n.id === 'hp');
 
     const solarVal = solar ? this._getKwh(solar.entity_id) : 0;
@@ -9153,6 +9389,7 @@ class SigenergySankeyPanel extends HTMLElement {
     const gridEVal = gridE ? this._getKwh(gridE.entity_id, gridE.add_entities) : 0;
     const gridIVal = gridI ? this._getKwh(gridI.entity_id, gridI.add_entities) : 0;
     const evVal = ev ? this._getKwh(ev.entity_id) : 0;
+    const ev2Val = ev2 ? this._getKwh(ev2.entity_id) : 0;
     const hpVal = hp ? this._getKwh(hp.entity_id) : 0;
 
     // Build 3×2 stat chips matching Sigenergy layout:
@@ -9167,7 +9404,8 @@ class SigenergySankeyPanel extends HTMLElement {
     if (gridI) chips.push({ node: gridI, val: gridIVal, icon: '🔌', label: 'Grid Imported' });
     if (gridE) chips.push({ node: gridE, val: gridEVal, icon: '⚡', label: 'Grid Exported' });
     // Add EV/HP only if they fit in a clean 3-column grid (max 6 for 3×2)
-    if (chips.length < 6 && ev && evVal > 0.01) chips.push({ node: ev, val: evVal, icon: '🚗', label: 'EV Charged' });
+    if (chips.length < 6 && ev && evVal > 0.01) chips.push({ node: ev, val: evVal, icon: '🚗', label: ev2 ? 'EV 1 Charged' : 'EV Charged' });
+    if (chips.length < 6 && ev2 && ev2Val > 0.01) chips.push({ node: ev2, val: ev2Val, icon: '🚗', label: 'EV 2 Charged' });
     if (chips.length < 6 && hp && hpVal > 0.01) chips.push({ node: hp, val: hpVal, icon: '🌡️', label: 'Heat Pump' });
 
     const fmt = (v) => v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2);
@@ -9239,7 +9477,7 @@ class SigenergySankeyPanel extends HTMLElement {
       .filter(b => b.kwh > 0.001)
       .sort((a, b) => b.kwh - a.kwh);
 
-    const typeMap = { solar: 'solar', load: 'home', bat_c: 'battery', bat_d: 'battery', grid_i: 'grid', grid_e: 'grid', ev: 'ev', hp: 'heatpump' };
+    const typeMap = { solar: 'solar', load: 'home', bat_c: 'battery', bat_d: 'battery', grid_i: 'grid', grid_e: 'grid', ev: 'ev', ev2: 'ev2', hp: 'heatpump' };
     const cfg = (window.SigenergyConfig && window.SigenergyConfig.get && window.SigenergyConfig.get()) || {};
     this.dispatchEvent(new CustomEvent('genergy-modal', {
       bubbles: true,
@@ -10974,7 +11212,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c GENERGY-DASHBOARD %c v2.25.1 ',
+  '%c GENERGY-DASHBOARD %c v2.26.0 ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
@@ -10985,82 +11223,61 @@ console.info(
 // No setTimeout — injects immediately via MutationObserver
 // ═══════════════════════════════════════════════════════════
 (function() {
-  var RESPONSIVE_CSS_DEFAULT = [
-    '/* Mobile + Tablet portrait: 1 column, all items stacked */',
-    '@media (max-width: 1024px) {',
-    '  :host { overflow-x: hidden !important; max-width: 100vw !important; }',
-    '  #root { grid-template-columns: 1fr !important; grid-template-rows: repeat(10, auto) !important; overflow-x: hidden !important; max-width: 100% !important; box-sizing: border-box !important; }',
-    '  #root > * { grid-column: 1 !important; grid-row: auto !important; max-width: 100% !important; overflow: hidden !important; box-sizing: border-box !important; }',
-    '}',
-    '',
-    '/* Tablet landscape: 2 columns with explicit placement */',
-    '@media (min-width: 1025px) and (max-width: 1200px) {',
-    '  #root { grid-template-columns: 1fr 1fr !important; grid-template-rows: repeat(6, auto) !important; }',
-    '  #root > *:nth-child(1) { grid-column: 1 !important; grid-row: 1 !important; }',
-    '  #root > *:nth-child(2) { grid-column: 2 !important; grid-row: 1 !important; }',
-    '  #root > *:nth-child(3) { grid-column: 1 !important; grid-row: 2 !important; }',
-    '  #root > *:nth-child(4) { grid-column: 1 !important; grid-row: 3 !important; }',
-    '  #root > *:nth-child(5) { grid-column: 2 !important; grid-row: 2 / span 2 !important; }',
-    '  #root > *:nth-child(6) { grid-column: 1 / -1 !important; grid-row: 4 !important; }',
-    '}',
-    '',
-    '/* Desktop: 3 columns, add spans for stats and apex */',
-    '@media (min-width: 1201px) {',
-    '  #root > *:nth-child(5) { grid-column: span 2 !important; }',
-    '  #root > *:nth-child(6) { grid-column: 1 / -1 !important; }',
-    '}',
-    '',
-    '/* Big screen (1920px+): increase grid gap for kiosk */',
-    '@media (min-width: 1800px) {',
-    '  #root { grid-gap: 12px !important; }',
-    '}',
-    '@media (min-width: 2400px) {',
-    '  #root { grid-gap: 16px !important; }',
-    '}'
-  ].join('\n');
-
-  // Battery-stack variant (6 direct #root children: house|sankey|battery|divider|chart|insights).
-  // Every child keeps min-width:0 + overflow:hidden so the sankey never forces overflow
-  // (proven identical in Chromium + WebKit). Column control lives entirely in these plain
-  // injected @media rules — no nested layout-card mediaquery (that was the Safari failure).
-  var RESPONSIVE_CSS_BATTERY = [
-    '@media (max-width: 1024px) {',
-    '  :host { overflow-x: hidden !important; max-width: 100vw !important; }',
-    '  #root { grid-template-columns: 1fr !important; grid-template-rows: repeat(12, auto) !important; overflow-x: hidden !important; max-width: 100% !important; box-sizing: border-box !important; }',
-    '  #root > * { grid-column: 1 !important; grid-row: auto !important; min-width: 0 !important; max-width: 100% !important; overflow: hidden !important; box-sizing: border-box !important; }',
-    '}',
-    '/* Tablet / small desktop: house|sankey side by side, everything else full width below */',
-    '@media (min-width: 1025px) and (max-width: 1499px) {',
-    '  #root { grid-template-columns: 1fr 1fr !important; }',
-    '  #root > *:nth-child(1) { grid-column: 1 !important; grid-row: 1 !important; }',
-    '  #root > *:nth-child(2) { grid-column: 2 !important; grid-row: 1 !important; }',
-    '  #root > *:nth-child(n+3) { grid-column: 1 / -1 !important; }',
-    '  #root > * { min-width: 0 !important; overflow: hidden !important; box-sizing: border-box !important; }',
-    '}',
-    '/* Desktop >=1500: 3 columns (house|sankey|battery), rest full width below */',
-    '@media (min-width: 1500px) {',
-    '  #root { grid-template-columns: minmax(300px, 0.8fr) minmax(440px, 1.2fr) minmax(400px, 1.05fr) !important; grid-template-rows: auto !important; }',
-    '  #root > *:nth-child(1) { grid-column: 1 !important; grid-row: 1 !important; }',
-    '  #root > *:nth-child(2) { grid-column: 2 !important; grid-row: 1 !important; }',
-    '  #root > *:nth-child(3) { grid-column: 3 !important; grid-row: 1 !important; }',
-    '  #root > *:nth-child(n+4) { grid-column: 1 / -1 !important; }',
-    '  #root > * { min-width: 0 !important; overflow: hidden !important; box-sizing: border-box !important; }',
-    '}',
-    '@media (min-width: 1800px) { #root { grid-gap: 14px !important; } }',
-    '@media (min-width: 2400px) { #root { grid-gap: 16px !important; } }'
-  ].join('\n');
-
-  // Read the flag from the PERSISTED config (not a build-time global) so a fresh page
-  // load — which renders the saved lovelace config WITHOUT calling _buildDashboard —
-  // still picks the variant matching the persisted DOM. OFF returns the byte-identical
-  // original CSS (the safety anchor: OFF users are untouched).
   function buildResponsiveCSS() {
-    var showBattery = false;
+    var topCount = 2;
     try {
       var c = window.SigenergyConfig && window.SigenergyConfig.get && window.SigenergyConfig.get();
-      showBattery = !!(c && c.display && c.display.show_battery_stack);
+      if (c && c.display) {
+        topCount = (c.display.show_house_card !== false ? 1 : 0)
+                 + (c.display.show_sankey !== false ? 1 : 0)
+                 + (c.display.show_battery_stack ? 1 : 0);
+      }
     } catch (e) {}
-    return showBattery ? RESPONSIVE_CSS_BATTERY : RESPONSIVE_CSS_DEFAULT;
+    if (topCount < 1) topCount = 0;
+
+    var rules = [];
+    var shared = 'min-width: 0 !important; max-width: 100% !important; overflow: hidden !important; box-sizing: border-box !important;';
+
+    rules.push('@media (max-width: 1024px) {');
+    rules.push('  :host { overflow-x: hidden !important; max-width: 100vw !important; }');
+    rules.push('  #root { grid-template-columns: 1fr !important; grid-template-rows: repeat(12, auto) !important; overflow-x: hidden !important; max-width: 100% !important; box-sizing: border-box !important; }');
+    rules.push('  #root > * { grid-column: 1 !important; grid-row: auto !important; ' + shared + ' }');
+    rules.push('}');
+
+    if (topCount <= 1) {
+      rules.push('@media (min-width: 1025px) {');
+      rules.push('  #root { grid-template-columns: 1fr !important; }');
+      rules.push('  #root > * { grid-column: 1 / -1 !important; ' + shared + ' }');
+      rules.push('}');
+    } else if (topCount === 2) {
+      rules.push('@media (min-width: 1025px) {');
+      rules.push('  #root { grid-template-columns: 1fr 1fr !important; }');
+      rules.push('  #root > *:nth-child(1) { grid-column: 1 !important; grid-row: 1 !important; }');
+      rules.push('  #root > *:nth-child(2) { grid-column: 2 !important; grid-row: 1 !important; }');
+      rules.push('  #root > *:nth-child(n+3) { grid-column: 1 / -1 !important; }');
+      rules.push('  #root > * { ' + shared + ' }');
+      rules.push('}');
+    } else {
+      rules.push('@media (min-width: 1025px) and (max-width: 1499px) {');
+      rules.push('  #root { grid-template-columns: 1fr 1fr !important; }');
+      rules.push('  #root > *:nth-child(1) { grid-column: 1 !important; grid-row: 1 !important; }');
+      rules.push('  #root > *:nth-child(2) { grid-column: 2 !important; grid-row: 1 !important; }');
+      rules.push('  #root > *:nth-child(n+3) { grid-column: 1 / -1 !important; }');
+      rules.push('  #root > * { ' + shared + ' }');
+      rules.push('}');
+      rules.push('@media (min-width: 1500px) {');
+      rules.push('  #root { grid-template-columns: minmax(300px, 0.8fr) minmax(440px, 1.2fr) minmax(400px, 1.05fr) !important; grid-template-rows: auto !important; }');
+      rules.push('  #root > *:nth-child(1) { grid-column: 1 !important; grid-row: 1 !important; }');
+      rules.push('  #root > *:nth-child(2) { grid-column: 2 !important; grid-row: 1 !important; }');
+      rules.push('  #root > *:nth-child(3) { grid-column: 3 !important; grid-row: 1 !important; }');
+      rules.push('  #root > *:nth-child(n+4) { grid-column: 1 / -1 !important; }');
+      rules.push('  #root > * { ' + shared + ' }');
+      rules.push('}');
+    }
+
+    rules.push('@media (min-width: 1800px) { #root { grid-gap: 14px !important; } }');
+    rules.push('@media (min-width: 2400px) { #root { grid-gap: 16px !important; } }');
+    return rules.join('\n');
   }
 
   function injectResponsiveCSS() {
