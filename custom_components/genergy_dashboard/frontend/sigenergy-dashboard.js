@@ -7321,7 +7321,9 @@ return forecast.map(function(d) {
       // Sankey info panel card
       const sankeyInfoPanel = {
         type: 'custom:sigenergy-sankey-panel',
-        nodes: _panelNodes
+        nodes: _panelNodes,
+        conservation_entities: sankeyChart.conservation_entities,
+        min_flow: sankeyChart.min_flow,
       };
 
       newCards.push({ type: 'vertical-stack', cards: [sankeyHeader, sankeyChart, sankeyInfoPanel], view_layout: { 'grid-column': '2' } });
@@ -7761,6 +7763,66 @@ return forecast.map(function(d) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// Shared flow allocation: seed + greedy proportional distribution
+// Used by both SigenergyEnergyFlowCard and SigenergySankeyPanel
+// ═══════════════════════════════════════════════════════════
+
+function _computeFlowMatrix(sources, dests, getKwh, conservationEntities) {
+  const ce = conservationEntities;
+  const remaining = {};
+  dests.forEach(d => { remaining[d.entity_id] = getKwh(d.entity_id, d.add_entities); });
+
+  const flowMatrix = {};
+  const srcSeedUsed = {};
+
+  if (ce && ce.solar && ce.battery_charge && ce.grid_import) {
+    const solarSrc = sources.find(s => s.entity_id === ce.solar);
+    const gridSrc = sources.find(s => s.entity_id === ce.grid_import);
+    const batCKwh = remaining[ce.battery_charge] || 0;
+    if (solarSrc && gridSrc && batCKwh > 0.005) {
+      const gridKwh = getKwh(gridSrc.entity_id, gridSrc.add_entities);
+      const solarKwh = getKwh(solarSrc.entity_id, solarSrc.add_entities);
+      const gridToBat = Math.min(gridKwh, batCKwh);
+      const solarToBat = Math.min(Math.max(0, batCKwh - gridKwh), solarKwh);
+      if (gridToBat > 0.005) {
+        flowMatrix[ce.grid_import] = flowMatrix[ce.grid_import] || {};
+        flowMatrix[ce.grid_import][ce.battery_charge] = gridToBat;
+        remaining[ce.battery_charge] -= gridToBat;
+        srcSeedUsed[ce.grid_import] = (srcSeedUsed[ce.grid_import] || 0) + gridToBat;
+      }
+      if (solarToBat > 0.005) {
+        flowMatrix[ce.solar] = flowMatrix[ce.solar] || {};
+        flowMatrix[ce.solar][ce.battery_charge] = solarToBat;
+        remaining[ce.battery_charge] -= solarToBat;
+        srcSeedUsed[ce.solar] = (srcSeedUsed[ce.solar] || 0) + solarToBat;
+      }
+    }
+  }
+
+  sources.forEach(src => {
+    const srcTotal = getKwh(src.entity_id, src.add_entities);
+    const srcVal = srcTotal - (srcSeedUsed[src.entity_id] || 0);
+    let srcRem = srcVal;
+    if (!flowMatrix[src.entity_id]) flowMatrix[src.entity_id] = {};
+    const childSet = new Set((src.children || []).filter(eid => remaining[eid] !== undefined));
+    dests.forEach(d => { if ((d.parents || []).includes(src.entity_id)) childSet.add(d.entity_id); });
+    const children = [...childSet];
+    const totalDstRem = children.reduce((s, eid) => s + (remaining[eid] || 0), 0);
+    children.forEach(eid => {
+      if (totalDstRem > 0 && srcRem > 0) {
+        const share = (remaining[eid] || 0) / totalDstRem;
+        const flow = Math.min(share * srcVal, srcRem, remaining[eid] || 0);
+        flowMatrix[src.entity_id][eid] = (flowMatrix[src.entity_id][eid] || 0) + flow;
+        remaining[eid] = (remaining[eid] || 0) - flow;
+        srcRem -= flow;
+      }
+    });
+  });
+
+  return flowMatrix;
+}
+
+// ═══════════════════════════════════════════════════════════
 // Custom Energy Flow Card — SVG-based Sankey with thick ribbons
 // Replaces ha-sankey-chart HACS integration
 // ═══════════════════════════════════════════════════════════
@@ -7891,58 +7953,7 @@ class SigenergyEnergyFlowCard extends HTMLElement {
   }
 
   _computeFlowMatrix(sources, dests) {
-    const ce = this._config.conservation_entities;
-    const remaining = {};
-    dests.forEach(d => { remaining[d.entity_id] = this._getKwh(d.entity_id, d.add_entities); });
-
-    const flowMatrix = {};
-    const srcSeedUsed = {};
-
-    if (ce && ce.solar && ce.battery_charge && ce.grid_import) {
-      const solarSrc = sources.find(s => s.entity_id === ce.solar);
-      const gridSrc = sources.find(s => s.entity_id === ce.grid_import);
-      const batCKwh = remaining[ce.battery_charge] || 0;
-      if (solarSrc && gridSrc && batCKwh > 0.005) {
-        const gridKwh = this._getKwh(gridSrc.entity_id, gridSrc.add_entities);
-        const solarKwh = this._getKwh(solarSrc.entity_id, solarSrc.add_entities);
-        const gridToBat = Math.min(gridKwh, batCKwh);
-        const solarToBat = Math.min(Math.max(0, batCKwh - gridKwh), solarKwh);
-        if (gridToBat > 0.005) {
-          flowMatrix[ce.grid_import] = flowMatrix[ce.grid_import] || {};
-          flowMatrix[ce.grid_import][ce.battery_charge] = gridToBat;
-          remaining[ce.battery_charge] -= gridToBat;
-          srcSeedUsed[ce.grid_import] = (srcSeedUsed[ce.grid_import] || 0) + gridToBat;
-        }
-        if (solarToBat > 0.005) {
-          flowMatrix[ce.solar] = flowMatrix[ce.solar] || {};
-          flowMatrix[ce.solar][ce.battery_charge] = solarToBat;
-          remaining[ce.battery_charge] -= solarToBat;
-          srcSeedUsed[ce.solar] = (srcSeedUsed[ce.solar] || 0) + solarToBat;
-        }
-      }
-    }
-
-    sources.forEach(src => {
-      const srcTotal = this._getKwh(src.entity_id, src.add_entities);
-      const srcVal = srcTotal - (srcSeedUsed[src.entity_id] || 0);
-      let srcRem = srcVal;
-      if (!flowMatrix[src.entity_id]) flowMatrix[src.entity_id] = {};
-      const childSet = new Set((src.children || []).filter(eid => remaining[eid] !== undefined));
-      dests.forEach(d => { if ((d.parents || []).includes(src.entity_id)) childSet.add(d.entity_id); });
-      const children = [...childSet];
-      const totalDstRem = children.reduce((s, eid) => s + (remaining[eid] || 0), 0);
-      children.forEach(eid => {
-        if (totalDstRem > 0 && srcRem > 0) {
-          const share = (remaining[eid] || 0) / totalDstRem;
-          const flow = Math.min(share * srcVal, srcRem, remaining[eid] || 0);
-          flowMatrix[src.entity_id][eid] = (flowMatrix[src.entity_id][eid] || 0) + flow;
-          remaining[eid] = (remaining[eid] || 0) - flow;
-          srcRem -= flow;
-        }
-      });
-    });
-
-    return flowMatrix;
+    return _computeFlowMatrix(sources, dests, (eid, add) => this._getKwh(eid, add), this._config.conservation_entities);
   }
 
   _render() {
@@ -8923,6 +8934,10 @@ class SigenergySankeyPanel extends HTMLElement {
       }
     }
     return total;
+  }
+
+  _computeFlowMatrix(sources, dests) {
+    return _computeFlowMatrix(sources, dests, (eid, add) => this._getKwh(eid, add), this._config.conservation_entities);
   }
 
   _toggleExpand() {
