@@ -2,6 +2,14 @@
 
 All notable changes to the Genergy Dashboard are documented here.
 
+## [2.26.1] - 2026-07-22
+
+Sankey card responsive scaling and dashboard column rebalance.
+
+### Fixed
+- **Sankey card height now scales with container** -- Replaced fixed pixel height with `aspect-ratio: 1.04` and converted node bar positions from pixels to percentages, so the Sankey resizes correctly when the dashboard column width changes.
+- **Dashboard grid columns rebalanced** -- House card column now gets ~58% width and Sankey column ~42%, giving more room to the house card and battery stack. Previously both columns were forced to equal width by a `1fr 1fr !important` override in the responsive grid fix.
+
 ## [2.26.0] - 2026-07-18
 
 Major cable editor overhaul, EV 2 Sankey support, dashboard section toggles, and a new simplified chart mode.

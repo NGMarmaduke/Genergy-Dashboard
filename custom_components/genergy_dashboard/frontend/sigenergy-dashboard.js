@@ -1,5 +1,5 @@
 /**
- * Genergy Dashboard v2.26.0 — Bundled Distribution
+ * Genergy Dashboard v2.26.1 — Bundled Distribution
  * 
  * Self-contained Lit Element cards for Home Assistant.
  * No build step required — loads directly as an ES module.
@@ -6898,18 +6898,18 @@ return forecast.map(function(d) {
         if (mainLayout.layout.mediaquery) {
           if (_topRowCount >= 2) {
             mainLayout.layout.mediaquery['(min-width: 1025px)'] = {
-              'grid-template-columns': 'minmax(420px, 0.95fr) minmax(520px, 1.25fr)',
+              'grid-template-columns': 'minmax(420px, 1.15fr) minmax(360px, 0.85fr)',
               'grid-gap': '16px',
               'align-items': 'start'
             };
             mainLayout.layout.mediaquery['(min-width: 1201px)'] = {
-              'grid-template-columns': 'minmax(460px, 0.95fr) minmax(620px, 1.35fr)',
+              'grid-template-columns': 'minmax(460px, 1.15fr) minmax(400px, 0.85fr)',
               'grid-template-rows': 'auto',
               'grid-gap': '16px',
               'align-items': 'start'
             };
             mainLayout.layout.mediaquery['(min-width: 1800px)'] = {
-              'grid-template-columns': 'minmax(560px, 0.95fr) minmax(780px, 1.35fr)',
+              'grid-template-columns': 'minmax(560px, 1.15fr) minmax(480px, 0.85fr)',
               'grid-template-rows': 'auto',
               'max-width': '2200px',
               'margin': '0 auto',
@@ -8456,7 +8456,7 @@ class SigenergyEnergyFlowCard extends HTMLElement {
         .efc-container {
           position: relative;
           width: 100%;
-          height: ${totalH}px;
+          aspect-ratio: 1.04;
         }
         .efc-svg {
           position: absolute;
@@ -8589,12 +8589,12 @@ class SigenergyEnergyFlowCard extends HTMLElement {
           </svg>
           <div class="label-col left">
             ${srcBoxes.map(b => {
-              return `<div class="node-bar" data-entity-id="${b.entity_id}" style="top:${b.y}px;height:${b.h}px;">${makeLabel(b, srcPcts[b.entity_id], 'left')}</div>`;
+              return `<div class="node-bar" data-entity-id="${b.entity_id}" style="top:${(b.y / totalH * 100).toFixed(3)}%;height:${(b.h / totalH * 100).toFixed(3)}%;">${makeLabel(b, srcPcts[b.entity_id], 'left')}</div>`;
             }).join('\n            ')}
           </div>
           <div class="label-col right">
             ${dstBoxes.map(b => {
-              return `<div class="node-bar" data-entity-id="${b.entity_id}" style="top:${b.y}px;height:${b.h}px;">${makeLabel(b, dstPcts[b.entity_id], 'right')}</div>`;
+              return `<div class="node-bar" data-entity-id="${b.entity_id}" style="top:${(b.y / totalH * 100).toFixed(3)}%;height:${(b.h / totalH * 100).toFixed(3)}%;">${makeLabel(b, dstPcts[b.entity_id], 'right')}</div>`;
             }).join('\n            ')}
           </div>
         </div>
@@ -11212,7 +11212,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c GENERGY-DASHBOARD %c v2.26.0 ',
+  '%c GENERGY-DASHBOARD %c v2.26.1 ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
@@ -11251,7 +11251,7 @@ console.info(
       rules.push('}');
     } else if (topCount === 2) {
       rules.push('@media (min-width: 1025px) {');
-      rules.push('  #root { grid-template-columns: 1fr 1fr !important; }');
+      rules.push('  #root { grid-template-columns: minmax(420px, 1.15fr) minmax(360px, 0.85fr) !important; }');
       rules.push('  #root > *:nth-child(1) { grid-column: 1 !important; grid-row: 1 !important; }');
       rules.push('  #root > *:nth-child(2) { grid-column: 2 !important; grid-row: 1 !important; }');
       rules.push('  #root > *:nth-child(n+3) { grid-column: 1 / -1 !important; }');
@@ -11259,7 +11259,7 @@ console.info(
       rules.push('}');
     } else {
       rules.push('@media (min-width: 1025px) and (max-width: 1499px) {');
-      rules.push('  #root { grid-template-columns: 1fr 1fr !important; }');
+      rules.push('  #root { grid-template-columns: minmax(420px, 1.15fr) minmax(360px, 0.85fr) !important; }');
       rules.push('  #root > *:nth-child(1) { grid-column: 1 !important; grid-row: 1 !important; }');
       rules.push('  #root > *:nth-child(2) { grid-column: 2 !important; grid-row: 1 !important; }');
       rules.push('  #root > *:nth-child(n+3) { grid-column: 1 / -1 !important; }');

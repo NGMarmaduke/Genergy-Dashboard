@@ -7,6 +7,8 @@
 
 A fully configurable Home Assistant Lovelace dashboard for monitoring solar, battery, and grid energy systems. Features animated power flow visualization, real-time energy charts with EMHASS, HAEO, and Energy Manager forecast overlays, battery pack monitoring, and a 4-tab settings UI for complete customization — no YAML editing required.
 
+> **New in `v2.26.1`**: **Sankey card height scaling** fix (now uses aspect-ratio instead of fixed pixels) and **dashboard column rebalance** (house card gets more room, Sankey narrower).
+>
 > **New in `v2.26.0`**: Major **Cable Path Editor overhaul** with full-screen modal, scroll-to-zoom (cursor-centered, 0.5x-5x), drag-to-pan, click-to-place points, right-click-to-delete, and active-path focus (inactive paths fade to thin lines, no more visual clutter). Plus **EV 2 in Sankey** as a separate destination node, **dashboard section visibility toggles** (show/hide House Card, Sankey, Chart, Smart Loads, Insights independently), a new **simplified chart mode**, **solar coverage stat card**, improved **self-sufficiency calculation**, and **HA-stored config profiles**.
 >
 > **New in `v2.25.1`**: **Sankey energy flow accuracy fix** (issue #36) with conservation seed flows, **EV 2 clickable detail modal** on the house card, and an optional **Time to Full Charge** entity field for both EVs.
