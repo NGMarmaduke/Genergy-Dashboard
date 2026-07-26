@@ -6065,6 +6065,18 @@ class SigenergySettingsCard extends HTMLElement {
       const st = this._hass?.states?.[entityId];
       return !!st && st.state !== 'unavailable' && st.state !== 'unknown';
     };
+    // Live power series smoothing. `last` over a 1min bucket keeps every sample, which
+    // makes solar spiky under broken cloud and load spiky on every appliance cycle.
+    // Averaging over a window smooths that out; the area then also represents energy
+    // more honestly. Grid uses a shorter window than you might expect because it is a
+    // SIGNED series — over a long bucket an import excursion and an export excursion
+    // average towards zero and both disappear. Battery is deliberately left unsmoothed.
+    const SMOOTH = {
+      solar:       { func: 'avg',  duration: '5min' },
+      battery:     { func: 'last', duration: '1min' },
+      grid:        { func: 'avg',  duration: '5min' },
+      consumption: { func: 'avg',  duration: '2min' },
+    };
     // Actual solar
     if (entityOk(e.solar_power)) series.push({
       entity: e.solar_power,
@@ -6072,7 +6084,7 @@ class SigenergySettingsCard extends HTMLElement {
       opacity: chartMode === 'simplified' ? 0.45 : 0.25,
       stroke_width: 2.5, extend_to: false, unit: ' kW',
       transform: powerTransform,
-      group_by: { func: 'last', duration: '1min' },
+      group_by: { ...SMOOTH.solar },
       show: { in_header: true, legend_value: true },
       yaxis_id: 'power', float_precision: fp
     });
@@ -6085,7 +6097,7 @@ class SigenergySettingsCard extends HTMLElement {
         stroke_width: chartMode === 'simplified' ? 2 : 2.5,
         extend_to: false, unit: ' kW',
         transform: powerTransform,
-        group_by: { func: 'last', duration: '1min' },
+        group_by: { ...SMOOTH.battery },
         show: { in_header: true, legend_value: true },
         yaxis_id: 'power', float_precision: fp
       };
@@ -6106,7 +6118,7 @@ class SigenergySettingsCard extends HTMLElement {
         stroke_width: chartMode === 'simplified' ? 2 : 2.5,
         extend_to: false, unit: ' kW',
         transform: powerTransform,
-        group_by: { func: 'last', duration: '1min' },
+        group_by: { ...SMOOTH.grid },
         show: { in_header: true, legend_value: true },
         yaxis_id: 'power', float_precision: fp
       };
@@ -6121,7 +6133,7 @@ class SigenergySettingsCard extends HTMLElement {
       stroke_width: chartMode === 'simplified' ? 2 : 1.5,
       extend_to: false, unit: ' kW',
       transform: powerTransform,
-      group_by: { func: 'last', duration: '1min' },
+      group_by: { ...SMOOTH.consumption },
       show: { in_header: true, legend_value: true },
       yaxis_id: 'power', invert: true, float_precision: fp
     });
