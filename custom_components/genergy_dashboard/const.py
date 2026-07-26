@@ -104,6 +104,7 @@ CONF_EV_ENERGY_DAILY_METER = "ev_energy_daily_meter"
 CONF_HP_ENERGY_DAILY_METER = "hp_energy_daily_meter"
 CONF_FEATURE_SHOW_EV_IN_SANKEY = "show_ev_in_sankey"
 CONF_FEATURE_SHOW_HP_IN_SANKEY = "show_hp_in_sankey"
+CONF_FEATURE_EV_EXCLUDE_BATTERY = "ev_exclude_battery"
 CONF_FEATURE_EV_ENERGY_IS_CUMULATIVE = "ev_energy_is_cumulative"
 CONF_FEATURE_HP_ENERGY_IS_CUMULATIVE = "hp_energy_is_cumulative"
 

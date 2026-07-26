@@ -206,6 +206,7 @@ const DEFAULT_CONFIG = {
     show_ev2_in_sankey: false,
     show_hp_in_sankey: false,
     show_losses_in_sankey: true,
+    ev_exclude_battery: false,
     ev_energy_is_cumulative: false,
     ev2_energy_is_cumulative: false,
     hp_energy_is_cumulative: false,
@@ -2878,6 +2879,13 @@ class SigenergySettingsCard extends HTMLElement {
               ` : ''}
               <div class="toggle-desc" style="color:#8892a4;font-size:10px;">Daily EV charging energy (kWh). Click Detect to scan your HA Energy Dashboard — if a cumulative sensor is found, a daily utility meter will be auto-created.</div>
             </div>
+            <div style="margin-top:8px;border-top:1px solid rgba(155,89,182,0.2);padding-top:8px;display:flex;align-items:center;justify-content:space-between;">
+              <div>
+                <div style="font-size:12px;font-weight:600;color:${cfg.features?.ev_exclude_battery ? '#E8705A' : '#8892a4'};">🔋 Exclude Battery as EV Source</div>
+                <div style="font-size:10px;color:#8892a4;margin-top:1px;">Removes the battery → EV flow. The flow is a pro-rata estimate, not measured, so it appears even if your battery never charges the car. Solar and grid absorb the EV energy instead.</div>
+              </div>
+              <div class="switch ${cfg.features?.ev_exclude_battery ? 'on' : 'off'}" data-key="ev_exclude_battery_toggle" style="flex-shrink:0;margin-left:12px;"></div>
+            </div>
           ` : ''}
         </div>
       </div>
@@ -3218,6 +3226,22 @@ class SigenergySettingsCard extends HTMLElement {
         if (this._hass) {
           this._buildDashboard().then(ok => {
             if (ok) console.log('Dashboard rebuilt after toggling EV Sankey');
+            this._render();
+          }).catch(() => this._render());
+        } else { this._render(); }
+      });
+    }
+
+    // Exclude Battery as EV source toggle handler
+    const evExcludeBatToggle = el.querySelector('[data-key="ev_exclude_battery_toggle"]');
+    if (evExcludeBatToggle) {
+      evExcludeBatToggle.addEventListener('click', () => {
+        const cfg2 = this._storeGet();
+        cfg2.features.ev_exclude_battery = !cfg2.features.ev_exclude_battery;
+        this._storeSave(cfg2);
+        if (this._hass) {
+          this._buildDashboard().then(ok => {
+            if (ok) console.log('Dashboard rebuilt after toggling Exclude Battery as EV source');
             this._render();
           }).catch(() => this._render());
         } else { this._render(); }
@@ -7339,14 +7363,17 @@ return forecast.map(function(d) {
         _smallConsForBat.push({ entity_id: hpSankeyEntity, connection_entity_id: '_conn_bat_to_hp' });
         _smallConsForGrid.push({ entity_id: hpSankeyEntity, connection_entity_id: '_conn_grid_to_hp' });
       }
+      // ev_exclude_battery: omit the battery -> EV connection so the flow is never drawn.
+      // Applies to both EV nodes; heat pump is unaffected.
+      const _evExclBat = !!f.ev_exclude_battery;
       if (f.show_ev_in_sankey && evSankeyEntity) {
         _smallConsForSolar.push({ entity_id: evSankeyEntity, connection_entity_id: '_conn_solar_to_ev' });
-        _smallConsForBat.push({ entity_id: evSankeyEntity, connection_entity_id: '_conn_bat_to_ev' });
+        if (!_evExclBat) _smallConsForBat.push({ entity_id: evSankeyEntity, connection_entity_id: '_conn_bat_to_ev' });
         _smallConsForGrid.push({ entity_id: evSankeyEntity, connection_entity_id: '_conn_grid_to_ev' });
       }
       if (f.show_ev2_in_sankey && ev2SankeyEntity) {
         _smallConsForSolar.push({ entity_id: ev2SankeyEntity, connection_entity_id: '_conn_solar_to_ev2' });
-        _smallConsForBat.push({ entity_id: ev2SankeyEntity, connection_entity_id: '_conn_bat_to_ev2' });
+        if (!_evExclBat) _smallConsForBat.push({ entity_id: ev2SankeyEntity, connection_entity_id: '_conn_bat_to_ev2' });
         _smallConsForGrid.push({ entity_id: ev2SankeyEntity, connection_entity_id: '_conn_grid_to_ev2' });
       }
 
@@ -7423,13 +7450,16 @@ return forecast.map(function(d) {
         _sankeyNodes.push(_geNode);
       }
       const _ev1Name = (f.show_ev2_in_sankey && ev2SankeyEntity) ? (cfg.display?.ev_charger_label || 'EV 1') : 'EV';
+      // _computeFlowMatrix() unions a source's children with each destination's parents,
+      // so the battery must be dropped from BOTH for the link to actually disappear.
+      const _evParents = [e.solar_energy_today, _evExclBat ? null : e.battery_discharge_today, _gridImportId].filter(Boolean);
       if (f.show_ev_in_sankey && evSankeyEntity) _sankeyNodes.push({
         id: 'ev', name: _ev1Name, color: _sTheme.ev, entity_id: evSankeyEntity, type: 'dest',
-        children: [], parents: [e.solar_energy_today, e.battery_discharge_today, _gridImportId].filter(Boolean)
+        children: [], parents: _evParents.slice()
       });
       if (f.show_ev2_in_sankey && ev2SankeyEntity) _sankeyNodes.push({
         id: 'ev2', name: cfg.display?.ev2_charger_label || 'EV 2', color: _sTheme.ev2, entity_id: ev2SankeyEntity, type: 'dest',
-        children: [], parents: [e.solar_energy_today, e.battery_discharge_today, _gridImportId].filter(Boolean)
+        children: [], parents: _evParents.slice()
       });
       if (f.show_hp_in_sankey && hpSankeyEntity) _sankeyNodes.push({
         id: 'hp', name: 'HP', color: _sTheme.hp, entity_id: hpSankeyEntity, type: 'dest',
@@ -7493,13 +7523,14 @@ return forecast.map(function(d) {
         _panelNodes.push(_gePanelNode);
       }
       const _ev1PanelName = (f.show_ev2_in_sankey && ev2SankeyEntity) ? (cfg.display?.ev_charger_label || 'EV 1 Charger') : 'EV Charger';
+      // Keep the breakdown panel consistent with the chart — same parent list.
       if (f.show_ev_in_sankey && evSankeyEntity) _panelNodes.push({
         id: 'ev', name: _ev1PanelName, color: _sTheme.ev, entity_id: evSankeyEntity, type: 'dest',
-        children: [], parents: [e.solar_energy_today, e.battery_discharge_today, _gridImportId].filter(Boolean)
+        children: [], parents: _evParents.slice()
       });
       if (f.show_ev2_in_sankey && ev2SankeyEntity) _panelNodes.push({
         id: 'ev2', name: (cfg.display?.ev2_charger_label || 'EV 2') + ' Charger', color: _sTheme.ev2, entity_id: ev2SankeyEntity, type: 'dest',
-        children: [], parents: [e.solar_energy_today, e.battery_discharge_today, _gridImportId].filter(Boolean)
+        children: [], parents: _evParents.slice()
       });
       if (f.show_hp_in_sankey && hpSankeyEntity) _panelNodes.push({
         id: 'hp', name: 'Heat Pump', color: _sTheme.hp, entity_id: hpSankeyEntity, type: 'dest',
@@ -11702,10 +11733,19 @@ window.genergyBuildSunAnnotations = function (sunEntity, enabled) {
           inject('_conn_bat_to_hp', hp * batPct);
           inject('_conn_grid_to_hp', hp * gridPct);
         }
+        // ev_exclude_battery: no battery -> EV connection. Re-normalise over solar+grid
+        // only, so the EV's inflows still sum to its total instead of leaving a gap.
+        var evExclBat = !!feat.ev_exclude_battery;
+        var evSolarPct = solarPct, evGridPct = gridPct;
+        if (evExclBat) {
+          var evDenom = solar + gridI;
+          evSolarPct = evDenom > 0 ? solar / evDenom : 0;
+          evGridPct = evDenom > 0 ? gridI / evDenom : 0;
+        }
         if (ev > 0) {
-          inject('_conn_solar_to_ev', ev * solarPct);
-          inject('_conn_bat_to_ev', ev * batPct);
-          inject('_conn_grid_to_ev', ev * gridPct);
+          inject('_conn_solar_to_ev', ev * evSolarPct);
+          if (!evExclBat) inject('_conn_bat_to_ev', ev * batPct);
+          inject('_conn_grid_to_ev', ev * evGridPct);
         }
         return true; // injected something
       } catch(e) { return false; }

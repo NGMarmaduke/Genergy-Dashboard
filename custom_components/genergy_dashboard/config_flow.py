@@ -81,6 +81,7 @@ from .const import (
     CONF_HP_ENERGY_DAILY_METER,
     CONF_FEATURE_SHOW_EV_IN_SANKEY,
     CONF_FEATURE_SHOW_HP_IN_SANKEY,
+    CONF_FEATURE_EV_EXCLUDE_BATTERY,
     CONF_FEATURE_EV_ENERGY_IS_CUMULATIVE,
     CONF_FEATURE_HP_ENERGY_IS_CUMULATIVE,
 )
@@ -192,6 +193,10 @@ def _extras_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             vol.Optional(
                 CONF_FEATURE_SHOW_HP_IN_SANKEY,
                 default=d.get(CONF_FEATURE_SHOW_HP_IN_SANKEY, False),
+            ): BooleanSelector(),
+            vol.Optional(
+                CONF_FEATURE_EV_EXCLUDE_BATTERY,
+                default=d.get(CONF_FEATURE_EV_EXCLUDE_BATTERY, False),
             ): BooleanSelector(),
             vol.Optional(
                 CONF_FEATURE_EMHASS,
